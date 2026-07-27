@@ -25,11 +25,13 @@ import { biquad, gain, limiterCurve, shaper, clamp, osc } from './dsp.js';
 import { IR_SPECS, generateIR } from './ir.js';
 
 const BUS_DEFS = {
-  weapons:  { trim: 0.95, comp: { threshold: -7, knee: 8, ratio: 2.6, attack: 0.003, release: 0.16 } },
-  foley:    { trim: 0.9, comp: { threshold: -14, knee: 10, ratio: 2.0, attack: 0.004, release: 0.2 } },
-  ambience: { trim: 0.5,  comp: { threshold: -24, knee: 12, ratio: 2.0, attack: 0.05, release: 0.5 } },
-  voice:    { trim: 0.85, comp: { threshold: -18, knee: 8, ratio: 3.0, attack: 0.006, release: 0.22 } },
-  ui:       { trim: 1.6,  comp: null },
+  // Weapons bus is aggressive on purpose: stacked automatic fire must squash
+  // before it hits the master waveshaper (that crackle is the limiter dying).
+  weapons:  { trim: 0.72, comp: { threshold: -14, knee: 6, ratio: 6.0, attack: 0.0015, release: 0.1 } },
+  foley:    { trim: 0.8,  comp: { threshold: -16, knee: 8, ratio: 3.0, attack: 0.003, release: 0.16 } },
+  ambience: { trim: 0.42, comp: { threshold: -24, knee: 12, ratio: 2.5, attack: 0.04, release: 0.4 } },
+  voice:    { trim: 0.8,  comp: { threshold: -18, knee: 8, ratio: 3.5, attack: 0.005, release: 0.2 } },
+  ui:       { trim: 1.4,  comp: null },
 };
 
 export class Mixer {
@@ -50,15 +52,15 @@ export class Mixer {
     // Headroom stage. It sits BEFORE the compressor/clipper on purpose: a
     // post-limiter volume control only scales an already-squashed signal, and
     // that is what destroys the difference between a footstep and a gunshot.
-    this.preGain = gain(actx, 0.22);
+    this.preGain = gain(actx, 0.16);
     this.masterComp = actx.createDynamicsCompressor();
-    // Safety net only: a single gunshot should barely touch it, a firefight
-    // plus a grenade should be held together by it.
-    this.masterComp.threshold.value = -2;
-    this.masterComp.knee.value = 3;
-    this.masterComp.ratio.value = 4;
-    this.masterComp.attack.value = 0.0035;
-    this.masterComp.release.value = 0.14;
+    // Real safety net: catches residual bus pile-up before the soft-clip curve
+    // starts aliasing (waveshaper crackle under dense combat).
+    this.masterComp.threshold.value = -6;
+    this.masterComp.knee.value = 4;
+    this.masterComp.ratio.value = 8;
+    this.masterComp.attack.value = 0.002;
+    this.masterComp.release.value = 0.1;
     this.softClip = shaper(actx, limiterCurve(), '4x');
     this.masterGain = gain(actx, this.masterVolume);
 

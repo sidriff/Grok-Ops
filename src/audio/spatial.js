@@ -16,14 +16,15 @@
  *    a distant *and* occluded source stacks both losses, as it should.
  *  - The whole chain is built once and only the panner→bus edge is connected
  *    while the emitter is in use; a free emitter is detached from the graph so
- *    the (expensive) HRTF convolution is not evaluated for silence.
+ *    the panner is not evaluated for silence.
  *  - Propagation delay is not a DelayNode: every voice is *scheduled* at
  *    `now + dist/343`, which is sample-accurate and free.
  */
 
 import { airCutoff, clamp, gain, biquad } from './dsp.js';
 
-const MAX_EMITTERS = 40;
+/** Hard pool size. Each live emitter runs a panner chain; overshoot = crackle. */
+const MAX_EMITTERS = 24;
 
 /** Reference distance for the attenuation curve, in metres. */
 const REF = 2.0;
@@ -40,7 +41,9 @@ class Emitter {
     this.sendGain = gain(actx, 0);
 
     const p = actx.createPanner();
-    p.panningModel = 'HRTF';
+    // equalpower: HRTF × dozens of concurrent emitters is a common Web Audio
+    // crackle source under combat load. Direction still reads; CPU doesn't melt.
+    p.panningModel = 'equalpower';
     p.distanceModel = 'inverse';
     p.refDistance = 1;
     p.rolloffFactor = 0; // attenuation handled by distGain
@@ -280,12 +283,13 @@ export class SpatialField {
     const occCut = 20000 * Math.pow(0.021, occ); // 1.0 -> ~420 Hz
     em.occLP.frequency.setValueAtTime(clamp(occCut, 300, 20000), t);
     em.occHS.gain.setValueAtTime(-26 * occ, t);
-    em.distGain.gain.setValueAtTime(clamp(atten * (opts.gain ?? 1), 0, 4), t);
+    // Absolute dry-path gain clamp — ambience used to pass gain: 6–14.
+    em.distGain.gain.setValueAtTime(clamp(atten * (opts.gain ?? 1), 0, 1.6), t);
 
-    // Farther and more occluded => a bit wetter, capped so distant fire doesn't
-    // drown in convolver wash (the old 0.022*90 path could hit ~3× send).
+    // Farther and more occluded => a bit wetter, hard-capped so the convolver
+    // never sees a stampede of full-level sends during a firefight.
     const send = (opts.send ?? 0.25) * (0.42 + Math.min(dist, 70) * 0.012) * (1 + occ * 0.4);
-    em.sendGain.gain.setValueAtTime(clamp(send, 0, 1.35), t);
+    em.sendGain.gain.setValueAtTime(clamp(send, 0, 1.0), t);
 
     em.connectOut(this.mixer.bus(em.busName), this.mixer.reverbSend);
     return em;
@@ -302,7 +306,7 @@ export class SpatialField {
     em.airLP.frequency.setTargetAtTime(airCutoff(dist), t, 0.12);
     em.occLP.frequency.setTargetAtTime(clamp(20000 * Math.pow(0.021, occ), 300, 20000), t, 0.12);
     em.occHS.gain.setTargetAtTime(-26 * occ, t, 0.12);
-    em.distGain.gain.setTargetAtTime(clamp(atten * (em.userGain ?? 1), 0, 4), t, 0.1);
+    em.distGain.gain.setTargetAtTime(clamp(atten * (em.userGain ?? 1), 0, 1.6), t, 0.1);
   }
 
   /** Hand a voice's top node to an emitter and set its teardown time. */

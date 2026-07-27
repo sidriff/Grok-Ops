@@ -43,7 +43,24 @@ import { classifySpace } from './ir.js';
 
 const PROBE_RAYS = 9;
 const PROBE_DIST = 40;
-const DRY_SLOTS = 48;
+/** Head-locked concurrent voices (own gun, UI, heartbeat). 48 was a flood. */
+const DRY_SLOTS = 14;
+/**
+ * Per-frame spawn budgets. Checked *before* synthesis so a firefight doesn't
+ * allocate hundreds of oscillators that get stolen a frame later.
+ * At 60 fps: shotWorld=3 → ≤180 world shots/s theoretical, but AI rarely hits it.
+ */
+const FRAME_BUDGET = {
+  shotFp: 1,     // own muzzle — one per frame is enough for any cyclic rate
+  shotWorld: 3,  // enemy + distant fire
+  impact: 3,
+  shell: 1,
+  whizz: 1,
+  step: 2,
+  bark: 1,
+  explosion: 1,
+  ambient: 1,
+};
 const GESTURES = ['pointerdown', 'mousedown', 'keydown', 'touchstart', 'wheel'];
 
 /** Names other subsystems already use, mapped onto our voices. */
@@ -101,8 +118,11 @@ export class AudioSystem {
     for (let i = 0; i < DRY_SLOTS; i++) this._dry.push({ node: null, send: null, end: 0 });
     this._dryCursor = 0;
 
-    /* per-frame rate limits */
-    this._budget = { impact: 0, step: 0, shell: 0, whizz: 0 };
+    /* per-frame rate limits (keys match FRAME_BUDGET) */
+    this._budget = {
+      shotFp: 0, shotWorld: 0, impact: 0, shell: 0, whizz: 0,
+      step: 0, bark: 0, explosion: 0, ambient: 0,
+    };
     this._lastBarkTime = -99;
     this._lastEnemyFire = -99;
 
@@ -273,7 +293,8 @@ export class AudioSystem {
 
       /* ---- reset per-frame budgets ------------------------------- */
       const b = this._budget;
-      b.impact = 0; b.step = 0; b.shell = 0; b.whizz = 0;
+      b.shotFp = 0; b.shotWorld = 0; b.impact = 0; b.shell = 0;
+      b.whizz = 0; b.step = 0; b.bark = 0; b.explosion = 0; b.ambient = 0;
 
       const s = this.stats;
       s.voices = this.field.stats.active;
@@ -295,6 +316,22 @@ export class AudioSystem {
       this.failed = true;
       this._teardown();
     }
+  }
+
+  /**
+   * Take one slot from a per-frame budget. Returns false when the cap is hit
+   * (caller must not build a voice). Force-bypass only for rare scripted beats.
+   */
+  _takeBudget(key, force = false) {
+    if (force) return true;
+    const cap = FRAME_BUDGET[key];
+    if (cap == null) return true;
+    if (this._budget[key] >= cap) {
+      this.stats.dropped++;
+      return false;
+    }
+    this._budget[key]++;
+    return true;
   }
 
   /* ================================================================ */
@@ -401,11 +438,16 @@ export class AudioSystem {
     try {
       const when = this.actx.currentTime + (o.extraDelay ?? 0);
       const voice = this._build(kind, when, o.dist ?? 0, o);
-      const g = mkGain(this.actx, o.gain ?? 1);
+      // Cap dry gain so a mis-scaled caller can't slam the weapons bus alone.
+      const g = mkGain(this.actx, clamp(o.gain ?? 1, 0, 1.4));
       voice.node.connect(g);
       g.connect(this.mixer.bus(bus));
       let sendNode = null;
-      const sendLevel = (o.send ?? send) * (voice.send ?? 1);
+      // Prefer explicit call-site send; don't multiply two full-scale numbers.
+      const sendLevel = clamp(
+        o.send != null ? o.send : (send * (voice.send ?? 1)),
+        0, 1.0,
+      );
       if (sendLevel > 0.001) {
         sendNode = mkGain(this.actx, sendLevel);
         g.connect(sendNode);
@@ -493,6 +535,7 @@ export class AudioSystem {
     if (this.actx.state === 'suspended') return false;
     const now = this.actx.currentTime;
     if (now - (this._lastBarkTime ?? -Infinity) < 0.42 && !opts.force) return false; // no mush
+    if (!this._takeBudget('bark', !!opts.force)) return false;
     this._lastBarkTime = now;
     const seed = (opts.voice ?? 0) | 0;
     // Formant shouts die under full geometry occlusion (occ LP drops to ~420 Hz
@@ -506,7 +549,7 @@ export class AudioSystem {
       radio: opts.radio ?? false,
       send: opts.send ?? 0.35,
       // Milder distance falloff than gunshots: voices stay readable at 40 m.
-      gain: opts.gain ?? 1.55,
+      gain: opts.gain ?? 1.25,
       occlusion: opts.occlusion !== undefined ? opts.occlusion : 0.15,
       maxDist: opts.maxDist ?? 90,
     };
@@ -585,6 +628,7 @@ export class AudioSystem {
           : dist < 2.6;
 
     if (firstPerson) {
+      if (!this._takeBudget('shotFp')) return;
       // Own weapon: no propagation delay, mostly dry, and the send level is
       // driven by the space probe so the *room* answers the shot — a tight slap
       // indoors, a short canyon crack outdoors (not a rec-center bloom).
@@ -593,6 +637,9 @@ export class AudioSystem {
       this._playDry('shot', { profile, firstPerson: true }, 'weapons', echo * 0.45);
       this.mixer.duck(0.55, 0.1);
     } else {
+      // Skip far, low-priority fire first so budget goes to nearby threats.
+      if (dist > 110 && this._budget.shotWorld >= FRAME_BUDGET.shotWorld - 1) return;
+      if (!this._takeBudget('shotWorld')) return;
       this._playAt('shot', x, y, z, { profile, firstPerson: false }, 'weapons', 0.95);
       this.mixer.duck(clamp(0.5 - dist * 0.004, 0.12, 0.5), 0.08);
       // Enemies opening fire get occasional chatter, so firefights feel alive
@@ -620,7 +667,7 @@ export class AudioSystem {
 
   _onShell(p) {
     if (!this.running || !p) return;
-    if (this._budget.shell++ > 2) return;
+    if (!this._takeBudget('shell')) return;
     const pos = p.position;
     const lp = this.field.listenerPos;
     const x = pos?.x ?? lp.x, y = pos?.y ?? lp.y, z = pos?.z ?? lp.z;
@@ -643,7 +690,7 @@ export class AudioSystem {
   _onImpact(p) {
     if (!this.running || !p) return;
     if (p.exit) return;                       // only the entry side gets a sound
-    if (this._budget.impact++ > 4) return;
+    if (!this._takeBudget('impact')) return;
     const pt = p.point;
     if (!pt) return;
     const dist = this.field.distanceTo(pt.x, pt.y, pt.z);
@@ -652,15 +699,15 @@ export class AudioSystem {
       surface: p.surface ?? 'concrete',
       energy: clamp((p.damage ?? 30) / 34, 0.35, 1.5),
     }, 'foley', 0.55);
-    // The round cracking past you is a separate sound from the impact itself.
-    if (dist < 6) {
+    // Close miss whoosh — only if the whizz budget still has room (no double-hit).
+    if (dist < 6 && this._takeBudget('whizz')) {
       this._playAt('whizz', pt.x, pt.y, pt.z, { miss: dist, noDelay: true }, 'foley', 0.7);
     }
   }
 
   _onTracer(p) {
     if (!this.running || !p?.from || !p?.to) return;
-    if (this._budget.whizz++ > 2) return;
+    if (!this._takeBudget('whizz')) return;
     // Closest approach of the trajectory to the listener.
     const lp = this.field.listenerPos;
     const ax = p.from.x, ay = p.from.y, az = p.from.z;
@@ -678,6 +725,7 @@ export class AudioSystem {
 
   _onExplosion(p) {
     if (!this.running || !p?.position) return;
+    if (!this._takeBudget('explosion')) return;
     const pos = p.position;
     const dist = this.field.distanceTo(pos.x, pos.y, pos.z);
     this._playAt('explosion', pos.x, pos.y, pos.z, {
@@ -691,7 +739,7 @@ export class AudioSystem {
 
   _onFootstep(p) {
     if (!this.running) return;
-    if (this._budget.step++ > 3) return;
+    if (!this._takeBudget('step')) return;
     const pos = p?.position;
     const lp = this.field.listenerPos;
     const x = pos?.x ?? lp.x, y = pos?.y ?? lp.y - 1.6, z = pos?.z ?? lp.z;
@@ -767,6 +815,8 @@ export class AudioSystem {
   /** A burst of gunfire a long way off, with correct propagation delay. */
   _distantVolley() {
     if (!this.running) return;
+    // One or two distant cracks — not a 6-round node stampede on the weapons bus.
+    if (!this._takeBudget('shotWorld')) return;
     const rng = this.rng;
     const lp = this.field.listenerPos;
     const a = rng.range(0, Math.PI * 2);
@@ -775,12 +825,13 @@ export class AudioSystem {
     const z = lp.z + Math.sin(a) * d;
     const y = lp.y + rng.range(-2, 6);
     const profile = rng.pick([WEAPON_PROFILES.ak, WEAPON_PROFILES.rifle, WEAPON_PROFILES.lmg, WEAPON_PROFILES.sniper]);
-    const rounds = 1 + ((rng.u32() % 6) | 0);
-    const rate = rng.range(0.075, 0.13);
+    const rounds = 1 + ((rng.u32() % 2) | 0);
+    const rate = rng.range(0.09, 0.14);
     for (let i = 0; i < rounds; i++) {
+      if (i > 0 && !this._takeBudget('shotWorld')) break;
       this._playAt('shot', x, y, z, {
         profile, extraDelay: i * rate * rng.range(0.9, 1.1), maxDist: 400,
-        gain: 4.5,
+        gain: 1.8,
         occlusion: 0, // it is over the rooftops, not through them
       }, 'weapons', 0.2);
     }
@@ -788,17 +839,19 @@ export class AudioSystem {
 
   _distantBoom() {
     if (!this.running) return;
+    if (!this._takeBudget('explosion')) return;
     const rng = this.rng;
     const lp = this.field.listenerPos;
     const a = rng.range(0, Math.PI * 2);
     const d = rng.range(120, 330);
     this._playAt('explosion', lp.x + Math.cos(a) * d, lp.y + rng.range(0, 8), lp.z + Math.sin(a) * d, {
-      radius: rng.range(6, 16), level: 1, maxDist: 400, occlusion: 0, gain: 6,
+      radius: rng.range(6, 16), level: 1, maxDist: 400, occlusion: 0, gain: 1.5,
     }, 'weapons', 0.25);
   }
 
   _ambientOneShot() {
     if (!this.running) return;
+    if (!this._takeBudget('ambient')) return;
     const rng = this.rng;
     const lp = this.field.listenerPos;
     const which = rng.pick(ONE_SHOTS);
@@ -812,7 +865,7 @@ export class AudioSystem {
       {
         which, level: rng.range(0.55, 1), maxDist: 400,
         occlusion: far ? 0 : undefined,
-        gain: far ? 14 : 2.5,
+        gain: far ? 2.2 : 1.3,
       }, 'ambience', 0.15);
   }
 
