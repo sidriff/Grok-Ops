@@ -327,6 +327,21 @@ export const DEATH = {
   spawnViewHalfAngle: (50 * Math.PI) / 180,
   /** Soft bonus: prefer spawns farther from the death position. */
   spawnDeathBias: 0.04,
+
+  /**
+   * Spawn facing: re-aim yaw after the point is chosen so you do not stare into
+   * a wall while threats sit behind you. Samples horizontal rays + threat bias.
+   */
+  /** Max forward probe for open-space scoring (metres). */
+  spawnLookRange: 16,
+  /** Hard penalty when a wall is closer than this in the facing direction. */
+  spawnWallClear: 3.2,
+  /** How strongly to face the nearest living threat (vs pure open space). */
+  spawnThreatAlign: 7.5,
+  /** Soft pull to face the death site when no threat is in range. */
+  spawnDeathAlign: 3.5,
+  /** Number of compass samples when picking a facing (evenly around 360°). */
+  spawnYawSamples: 16,
 };
 
 export const FOOTSTEP = {

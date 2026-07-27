@@ -159,6 +159,7 @@ export class PlayerSystem {
     this._spawnEye = new THREE.Vector3();
     this._enemyEye = new THREE.Vector3();
     this._toSpawn = new THREE.Vector3();
+    this._desireDir = new THREE.Vector3();
     /** Last emitted discrete state, compared field-wise so no string is built. */
     this._prev = {
       state: '', stance: '', sprinting: false, tacticalSprint: false,
@@ -250,6 +251,9 @@ export class PlayerSystem {
    * from the death position. Falls back to the least-bad option if every
    * point is contested (small maps / full surround).
    *
+   * Always re-aims yaw after the point is chosen so the player faces open
+   * space toward threats rather than the authored corner angle.
+   *
    * @param {number|null|undefined} forced   force this index (debug / harness)
    * @param {THREE.Vector3|null}    deathPos bias away from the kill site
    */
@@ -257,8 +261,16 @@ export class PlayerSystem {
     const world = this.ctx.peek('world');
     const points = world?.spawnPoints;
     const n = points?.length ?? 0;
-    if (n <= 0) return this._resolveSpawn(0);
-    if (forced !== undefined && forced !== null) return this._resolveSpawn(forced);
+    if (n <= 0) {
+      const s = this._resolveSpawn(0);
+      this._orientSpawn(s, deathPos);
+      return s;
+    }
+    if (forced !== undefined && forced !== null) {
+      const s = this._resolveSpawn(forced);
+      this._orientSpawn(s, deathPos);
+      return s;
+    }
 
     let bestI = (this._spawnIndex + 1) % n;
     let bestScore = -Infinity;
@@ -275,12 +287,15 @@ export class PlayerSystem {
       }
     }
     this._spawnIndex = bestI;
-    return this._resolveSpawn(bestI);
+    const picked = this._resolveSpawn(bestI);
+    this._orientSpawn(picked, death);
+    return picked;
   }
 
   /**
    * Higher is safer. Visible to any living enemy → large penalty. Close to any
-   * enemy → hard penalty. Distance from death is a soft preference.
+   * enemy → hard penalty. Open sightlines preferred over alley corners.
+   * Distance from death is a soft preference.
    */
   _scoreSpawn(spawn, deathPos) {
     const D = DEATH;
@@ -365,7 +380,149 @@ export class PlayerSystem {
       const ddz = spawn.feet.z - deathPos.z;
       score += Math.hypot(ddx, ddz) * D.spawnDeathBias;
     }
+
+    // Corners lose: max open ray in any direction. Keeps alley dead-ends from
+    // winning just because nobody can see them.
+    score += this._spawnOpenness(spawn) * 0.55;
     return score;
+  }
+
+  /**
+   * Best free-space distance from a spawn eye across the compass (metres).
+   * Used both to prefer open spawns and to re-aim yaw after the pick.
+   */
+  _spawnOpenness(spawn) {
+    const D = DEATH;
+    const eyeH = STANCE.stand.eye;
+    const ox = spawn.feet.x;
+    const oy = spawn.feet.y + eyeH;
+    const oz = spawn.feet.z;
+    const phys = this.physics;
+    if (!phys?.raycast) return 8;
+    const mask = phys.MASK?.WORLD ?? phys.MASK?.SIGHT;
+    const range = D.spawnLookRange;
+    const n = 8;
+    let best = 0;
+    for (let i = 0; i < n; i++) {
+      const yaw = (i / n) * Math.PI * 2;
+      const fx = -Math.sin(yaw);
+      const fz = -Math.cos(yaw);
+      const hit = phys.raycast(ox, oy, oz, fx, 0, fz, range, mask);
+      const d = hit?.hit ? hit.distance : range;
+      if (d > best) best = d;
+    }
+    return best;
+  }
+
+  /**
+   * Replace authored spawn yaw with one that faces open space and, when
+   * possible, toward living threats (or the death site as a fallback).
+   * Mutates `spawn.yaw`.
+   */
+  _orientSpawn(spawn, deathPos = null) {
+    const D = DEATH;
+    const eyeH = STANCE.stand.eye;
+    const ox = spawn.feet.x;
+    const oy = spawn.feet.y + eyeH;
+    const oz = spawn.feet.z;
+    const phys = this.physics;
+    const range = D.spawnLookRange;
+    const wall = D.spawnWallClear;
+    const samples = D.spawnYawSamples | 0 || 16;
+
+    // --- desire direction: nearest living threat, else death, else authored --
+    let desireX = -Math.sin(spawn.yaw);
+    let desireZ = -Math.cos(spawn.yaw);
+    let threatW = 0;
+    let nearestThreat = Infinity;
+
+    const ai = this.ctx.peek('ai');
+    const agents = ai?.agents;
+    if (agents?.length) {
+      let sx = 0;
+      let sz = 0;
+      let count = 0;
+      for (let i = 0; i < agents.length; i++) {
+        const a = agents[i];
+        if (!a || a.alive === false || a.isPlayerCorpse || !a.position) continue;
+        const dx = a.position.x - ox;
+        const dz = a.position.z - oz;
+        const d = Math.hypot(dx, dz);
+        if (d < 1 || d > D.spawnViewRange * 1.35) continue;
+        // Weight nearer threats more so one flanker does not lose to a crowd far away.
+        const w = 1 / (d * d);
+        sx += dx * w;
+        sz += dz * w;
+        count += w;
+        if (d < nearestThreat) nearestThreat = d;
+      }
+      if (count > 0) {
+        const l = Math.hypot(sx, sz) || 1;
+        desireX = sx / l;
+        desireZ = sz / l;
+        threatW = D.spawnThreatAlign;
+      }
+    }
+
+    if (threatW <= 0 && deathPos) {
+      const dx = deathPos.x - ox;
+      const dz = deathPos.z - oz;
+      const d = Math.hypot(dx, dz);
+      if (d > 2) {
+        desireX = dx / d;
+        desireZ = dz / d;
+        threatW = D.spawnDeathAlign;
+      }
+    }
+
+    this._desireDir.set(desireX, 0, desireZ);
+
+    let bestYaw = spawn.yaw;
+    let bestScore = -Infinity;
+    const mask = phys?.MASK?.WORLD ?? phys?.MASK?.SIGHT;
+
+    for (let i = 0; i < samples; i++) {
+      const yaw = (i / samples) * Math.PI * 2;
+      const fx = -Math.sin(yaw);
+      const fz = -Math.cos(yaw);
+
+      // Forward clearance — the main "don't face a wall" signal.
+      let open = range;
+      if (phys?.raycast) {
+        const hit = phys.raycast(ox, oy, oz, fx, 0, fz, range, mask);
+        open = hit?.hit ? hit.distance : range;
+      }
+
+      let s = open;
+      // Wall in your face is the whole bug; crush those samples.
+      if (open < wall) s -= (wall - open) * 18;
+      // Prefer the open corridor (also probe slightly off-axis so a doorway wins).
+      if (phys?.raycast) {
+        const yawL = yaw + 0.35;
+        const yawR = yaw - 0.35;
+        const hL = phys.raycast(ox, oy, oz, -Math.sin(yawL), 0, -Math.cos(yawL), range * 0.7, mask);
+        const hR = phys.raycast(ox, oy, oz, -Math.sin(yawR), 0, -Math.cos(yawR), range * 0.7, mask);
+        const oL = hL?.hit ? hL.distance : range * 0.7;
+        const oR = hR?.hit ? hR.distance : range * 0.7;
+        s += (oL + oR) * 0.2;
+      }
+
+      // Face threats / death when the lane is open enough.
+      const align = fx * desireX + fz * desireZ; // -1..1
+      if (open >= wall * 0.85) s += align * threatW;
+      // Mild preference to keep something like the authored facing when tied.
+      const authored = -Math.sin(spawn.yaw) * fx + -Math.cos(spawn.yaw) * fz;
+      s += authored * 0.6;
+
+      if (s > bestScore) {
+        bestScore = s;
+        bestYaw = yaw;
+      }
+    }
+
+    spawn.yaw = bestYaw;
+    spawn.pitch = 0;
+    return spawn;
   }
 
   /* ==================================================================== */
