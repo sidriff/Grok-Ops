@@ -172,7 +172,11 @@ export async function prewarm(engine, { onProgress = () => {}, transients = fals
 
   try {
     let step = 0;
-    const totalSteps = WARM_POSES.length * 2 + (transients ? transientStages.length : 0) + 1;
+    // Hook count is known after we scan; we over-count by a safe upper bound so
+    // progress never jumps backwards when hooks are discovered mid-pass.
+    const hookBudget = 6;
+    const totalSteps =
+      WARM_POSES.length * 2 + hookBudget + (transients ? transientStages.length : 0) + 1;
     const tick = () => onProgress(Math.min(1, ++step / totalSteps));
 
     // Pass 1: compile the static world from each pose, with the depth/shadow
@@ -246,7 +250,12 @@ export async function prewarm(engine, { onProgress = () => {}, transients = fals
         // An optional hook must never be able to block boot.
         hookResults[id] = { ok: false, reason: String(err?.message ?? err) };
       }
+      tick();
+      // Yield so the boot progress bar can paint between long compile hooks.
+      await yieldFrame();
     }
+    // Consume any unused hook budget so the bar still lands cleanly.
+    for (let i = hooks.length; i < hookBudget; i++) tick();
     engine.__prewarmHooks = hookResults;
 
     // Pass 2: spawn each subsystem's transient objects and compile those too.

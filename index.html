@@ -7,14 +7,312 @@
     <style>
       :root { color-scheme: dark; }
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-      body { font-family: "Inter", "Helvetica Neue", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #05070a; }
+      body {
+        font-family: "Avenir Next Condensed", "DIN Alternate", "Roboto Condensed", "Arial Narrow",
+          "Helvetica Neue", Inter, system-ui, -apple-system, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: rgba(238, 244, 247, 0.95);
+      }
       #game { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: none; }
+      #ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+
+      /* ------------------------------------------------------------------ */
+      /* Boot / title shell — paints before any module loads                 */
+      /* ------------------------------------------------------------------ */
+      #boot {
+        position: fixed; inset: 0; z-index: 100;
+        pointer-events: auto; cursor: default;
+        display: flex; align-items: center; justify-content: flex-start;
+        overflow: hidden;
+        background: #05070a;
+        transition: opacity 0.55s ease, background 0.7s ease, backdrop-filter 0.7s ease;
+        will-change: opacity;
+      }
+      #boot.boot-ready {
+        background: linear-gradient(105deg, rgba(4, 6, 8, 0.88) 0%, rgba(4, 6, 8, 0.62) 48%, rgba(4, 6, 8, 0.28) 100%);
+        backdrop-filter: blur(8px) saturate(0.75) brightness(0.85);
+      }
+      #boot.boot-gone {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #boot.boot-hidden {
+        display: none !important;
+      }
+
+      /* Atmosphere layers */
+      .boot-sky {
+        position: absolute; inset: 0;
+        background:
+          radial-gradient(ellipse 90% 55% at 70% 18%, rgba(255, 176, 42, 0.14), transparent 55%),
+          radial-gradient(ellipse 70% 50% at 18% 80%, rgba(121, 210, 255, 0.07), transparent 50%),
+          linear-gradient(180deg, #0a1018 0%, #05070a 42%, #070a0e 100%);
+        animation: boot-sky-breathe 9s ease-in-out infinite;
+      }
+      @keyframes boot-sky-breathe {
+        0%, 100% { filter: brightness(1); }
+        50% { filter: brightness(1.08); }
+      }
+
+      .boot-horizon {
+        position: absolute; left: -10%; right: -10%; bottom: 18%;
+        height: 42%;
+        background:
+          linear-gradient(180deg, transparent 0%, rgba(8, 12, 18, 0.55) 40%, #05070a 100%),
+          repeating-linear-gradient(
+            90deg,
+            transparent 0 38px,
+            rgba(255, 255, 255, 0.02) 38px 40px
+          );
+        transform-origin: 50% 100%;
+        animation: boot-horizon-drift 22s linear infinite;
+      }
+      @keyframes boot-horizon-drift {
+        from { transform: translateX(0); }
+        to { transform: translateX(-40px); }
+      }
+
+      .boot-sil {
+        position: absolute; left: 0; right: 0; bottom: 0; height: 34%;
+        background:
+          linear-gradient(180deg, transparent, #030508 72%),
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 200' preserveAspectRatio='none'%3E%3Cpath fill='%23060a10' d='M0 160 L40 150 L55 90 L70 150 L110 145 L130 70 L155 145 L200 140 L220 100 L240 140 L300 135 L320 55 L350 135 L420 130 L450 95 L480 130 L540 125 L560 80 L590 125 L680 120 L700 60 L740 120 L820 115 L850 85 L880 115 L960 110 L990 70 L1020 110 L1100 105 L1130 75 L1160 105 L1200 100 L1200 200 L0 200Z'/%3E%3C/svg%3E")
+            bottom / 100% 100% no-repeat;
+        opacity: 0.9;
+      }
+
+      .boot-dust {
+        position: absolute; inset: 0;
+        background-image:
+          radial-gradient(1px 1px at 12% 28%, rgba(255, 255, 255, 0.35), transparent),
+          radial-gradient(1px 1px at 38% 62%, rgba(255, 255, 255, 0.22), transparent),
+          radial-gradient(1.5px 1.5px at 71% 19%, rgba(255, 220, 160, 0.28), transparent),
+          radial-gradient(1px 1px at 84% 74%, rgba(255, 255, 255, 0.2), transparent),
+          radial-gradient(1px 1px at 55% 41%, rgba(255, 255, 255, 0.18), transparent),
+          radial-gradient(1.2px 1.2px at 22% 81%, rgba(255, 255, 255, 0.16), transparent);
+        animation: boot-dust 14s linear infinite;
+        opacity: 0.55;
+        pointer-events: none;
+      }
+      @keyframes boot-dust {
+        from { transform: translate3d(0, 0, 0); }
+        to { transform: translate3d(-30px, -18px, 0); }
+      }
+
+      .boot-scan {
+        position: absolute; inset: 0;
+        background: repeating-linear-gradient(
+          0deg,
+          transparent 0 2px,
+          rgba(0, 0, 0, 0.08) 2px 3px
+        );
+        opacity: 0.35;
+        pointer-events: none;
+        mix-blend-mode: multiply;
+      }
+
+      .boot-sweep {
+        position: absolute; left: -20%; top: 0; bottom: 0; width: 40%;
+        background: linear-gradient(90deg, transparent, rgba(255, 176, 42, 0.045), transparent);
+        animation: boot-sweep 5.5s ease-in-out infinite;
+        pointer-events: none;
+      }
+      @keyframes boot-sweep {
+        0% { transform: translateX(0); opacity: 0; }
+        20% { opacity: 1; }
+        80% { opacity: 1; }
+        100% { transform: translateX(320%); opacity: 0; }
+      }
+
+      .boot-vignette {
+        position: absolute; inset: 0;
+        background: radial-gradient(ellipse 75% 70% at 50% 45%, transparent 35%, rgba(0, 0, 0, 0.55) 100%);
+        pointer-events: none;
+      }
+
+      /* Content panel */
+      .boot-panel {
+        position: relative; z-index: 2;
+        margin-left: clamp(2rem, 6vw, 5.5rem);
+        max-width: min(28rem, 88vw);
+        padding-left: 1.1rem;
+        border-left: 2px solid #ffb02a;
+      }
+
+      .boot-kicker {
+        font-size: 0.68rem;
+        letter-spacing: 0.34em;
+        color: rgba(196, 210, 219, 0.38);
+        margin-bottom: 0.85rem;
+      }
+
+      .boot-title {
+        font-family: "DIN Condensed", "Avenir Next Condensed", "Oswald", "Arial Narrow",
+          "Helvetica Neue", Impact, system-ui, sans-serif;
+        font-size: clamp(2.6rem, 7vw, 3.6rem);
+        font-weight: 700;
+        letter-spacing: 0.28em;
+        line-height: 1;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.85);
+        margin-left: -0.04em;
+      }
+
+      .boot-sub {
+        margin-top: 0.7rem;
+        font-size: 0.72rem;
+        letter-spacing: 0.3em;
+        color: rgba(196, 210, 219, 0.42);
+      }
+
+      .boot-rule {
+        margin: 1.6rem 0 1.2rem;
+        height: 1px;
+        background: linear-gradient(to right, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0));
+      }
+
+      .boot-status {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.55rem;
+        font-size: 0.7rem;
+        letter-spacing: 0.22em;
+        color: rgba(214, 227, 234, 0.62);
+        min-height: 1.1em;
+      }
+      .boot-status #boot-label { flex: 1; min-width: 0; }
+      .boot-status #boot-pct {
+        font-family: "SF Mono", ui-monospace, "Roboto Mono", Menlo, monospace;
+        color: #ffb02a;
+        letter-spacing: 0.06em;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .boot-bar {
+        position: relative;
+        height: 3px;
+        background: rgba(255, 255, 255, 0.1);
+        overflow: hidden;
+      }
+      .boot-bar-fill {
+        position: absolute; left: 0; top: 0; bottom: 0;
+        width: 0%;
+        background: linear-gradient(90deg, #ff9a12, #ffb02a 55%, #ffd078);
+        box-shadow: 0 0 12px rgba(255, 176, 42, 0.45);
+        transition: width 0.18s ease-out;
+      }
+      .boot-bar-glow {
+        position: absolute; top: 0; bottom: 0; width: 28%;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+        animation: boot-bar-shimmer 1.4s ease-in-out infinite;
+        opacity: 0.7;
+      }
+      #boot.boot-ready .boot-bar-glow { display: none; }
+      @keyframes boot-bar-shimmer {
+        0% { left: -30%; }
+        100% { left: 110%; }
+      }
+
+      .boot-meta {
+        margin-top: 0.85rem;
+        font-size: 0.62rem;
+        letter-spacing: 0.2em;
+        color: rgba(196, 210, 219, 0.28);
+        min-height: 1em;
+      }
+
+      .boot-actions {
+        margin-top: 1.75rem;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      #boot-deploy {
+        appearance: none;
+        border: 1px solid rgba(255, 176, 42, 0.35);
+        background: rgba(255, 176, 42, 0.12);
+        color: rgba(255, 220, 160, 0.45);
+        font: inherit;
+        font-weight: 700;
+        font-size: 0.78rem;
+        letter-spacing: 0.28em;
+        padding: 0.85rem 1.9rem;
+        cursor: not-allowed;
+        transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
+      }
+      #boot-deploy:disabled { opacity: 0.85; }
+      #boot.boot-ready #boot-deploy:not(:disabled) {
+        background: #ffb02a;
+        border-color: #ffb02a;
+        color: #100b02;
+        cursor: pointer;
+        box-shadow: 0 0 22px rgba(255, 176, 42, 0.28);
+      }
+      #boot.boot-ready #boot-deploy:not(:disabled):hover {
+        background: #ffc251;
+        border-color: #ffc251;
+      }
+      #boot.boot-ready #boot-deploy:not(:disabled):focus-visible {
+        outline: 2px solid #ffd078;
+        outline-offset: 3px;
+      }
+
+      .boot-hint {
+        font-size: 0.6rem;
+        letter-spacing: 0.22em;
+        color: rgba(196, 210, 219, 0.28);
+      }
+      #boot.boot-ready .boot-hint { color: rgba(196, 210, 219, 0.42); }
+
+      @media (prefers-reduced-motion: reduce) {
+        .boot-sky, .boot-horizon, .boot-dust, .boot-sweep, .boot-bar-glow {
+          animation: none !important;
+        }
+      }
     </style>
   </head>
   <body>
     <canvas id="game"></canvas>
     <div id="ui"></div>
+
+    <div id="boot" role="dialog" aria-label="Grok Ops loading" aria-live="polite">
+      <div class="boot-sky" aria-hidden="true"></div>
+      <div class="boot-horizon" aria-hidden="true"></div>
+      <div class="boot-sil" aria-hidden="true"></div>
+      <div class="boot-dust" aria-hidden="true"></div>
+      <div class="boot-scan" aria-hidden="true"></div>
+      <div class="boot-sweep" aria-hidden="true"></div>
+      <div class="boot-vignette" aria-hidden="true"></div>
+
+      <div class="boot-panel">
+        <div class="boot-kicker">Operator Briefing</div>
+        <h1 class="boot-title">Grok Ops</h1>
+        <div class="boot-sub">Five Minute Firefight</div>
+        <div class="boot-rule"></div>
+
+        <div class="boot-status">
+          <span id="boot-label">Initializing…</span>
+          <span id="boot-pct">0%</span>
+        </div>
+        <div class="boot-bar" aria-hidden="true">
+          <div class="boot-bar-fill" id="boot-fill"></div>
+          <div class="boot-bar-glow"></div>
+        </div>
+        <div class="boot-meta" id="boot-meta"></div>
+
+        <div class="boot-actions">
+          <button type="button" id="boot-deploy" disabled>Deploy</button>
+          <span class="boot-hint" id="boot-hint">Building the AO</span>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

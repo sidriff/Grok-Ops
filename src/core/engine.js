@@ -72,13 +72,45 @@ export class Engine {
     return this;
   }
 
-  async init() {
+  /**
+   * @param {{ onProgress?: (t: number, info: { stage: string, label?: string }) => void }} [opts]
+   *   `t` is 0..1 across subsystem init only (prewarm is layered by the boot
+   *   path on top of this range).
+   */
+  async init({ onProgress } = {}) {
+    // Heavier systems claim more of the bar so it doesn't sit at 90% during
+    // materials/world/ai for half the wait. Weights are approximate wall-clock
+    // shares measured from boot logs, not hard contracts.
+    const WEIGHT = {
+      render: 1.2,
+      materials: 3.2,
+      sky: 1.6,
+      world: 3.0,
+      physics: 1.0,
+      player: 0.5,
+      weapons: 1.4,
+      fx: 1.1,
+      ai: 2.4,
+      ui: 0.4,
+      audio: 1.5,
+    };
     const order = this.registry.resolve();
+    let total = 0;
+    for (const sys of order) total += WEIGHT[sys.constructor.id] ?? 1;
+    const yieldPaint = () => new Promise((r) => requestAnimationFrame(r));
+    let done = 0;
     for (const sys of order) {
+      const id = sys.constructor.id;
+      const w = WEIGHT[id] ?? 1;
+      onProgress?.(done / total, { stage: id, label: id });
+      // Let the boot shell repaint between heavy subsystems (materials/world/ai).
+      if (onProgress) await yieldPaint();
       const t0 = performance.now();
       await sys.init?.(this.ctx);
       const ms = performance.now() - t0;
-      if (ms > 50) console.info(`[engine] ${sys.constructor.id} init ${ms.toFixed(0)}ms`);
+      if (ms > 50) console.info(`[engine] ${id} init ${ms.toFixed(0)}ms`);
+      done += w;
+      onProgress?.(done / total, { stage: id, label: id });
     }
     this.input.attach();
     addEventListener('resize', this._onResize);
