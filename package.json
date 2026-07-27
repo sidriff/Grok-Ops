@@ -1,6 +1,7 @@
 {
-  "name": "claude-of-duty",
-  "version": "1.0.0",
+  "name": "grok-ops",
+  "version": "0.1.0",
+  "description": "Grok Ops — a five-minute gunfight. Fork of Claude of Duty.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
