@@ -38,41 +38,60 @@ const skipMenu =
 
 const load = createLoadScreen();
 if (skipMenu) load.hideImmediate();
-else load.setProgress(0.02, { stage: 'boot', label: 'Booting…' });
 
-// Quality: explicit `?q=` wins. Capture tools default to ultra for stable
-// baselines. Everyone else gets GPU auto-detect so we stop shipping hitch-city.
-load.setProgress(0.04, { stage: 'gpu', label: 'Detecting GPU…' });
+// GPU probe is cheap and informs the briefing recommendation + capture defaults.
 const forcedQ = params.get('q');
 const gpu = detectGraphics();
-const quality =
-  forcedQ && QUALITY_PRESETS[forcedQ]
-    ? forcedQ
-    : capture
-      ? 'ultra'
-      : gpu.quality;
+window.__GPU__ = gpu;
+
+let quality;
+let lookPrefs = { sensitivity: 0.0022, fov: 80, invertY: false };
+
+if (skipMenu) {
+  quality =
+    forcedQ && QUALITY_PRESETS[forcedQ]
+      ? forcedQ
+      : capture
+        ? 'ultra'
+        : gpu.quality;
+} else {
+  // Phase 1 — briefing: project pitch + graphics pick, then Load.
+  // Quality must be chosen before Engine init (bakes, shadows, prewarm budget).
+  const choice = await load.waitForBriefing({
+    recommended: gpu.quality,
+    forced: forcedQ && QUALITY_PRESETS[forcedQ] ? forcedQ : null,
+    gpuLabel: gpu.renderer || '',
+  });
+  quality = choice.quality;
+  lookPrefs = {
+    sensitivity: choice.sensitivity,
+    fov: choice.fov,
+    invertY: choice.invertY,
+  };
+  load.beginLoading({
+    meta: `${quality.toUpperCase()} · ${gpu.renderer || 'GPU'}`,
+  });
+  load.setProgress(0.04, { stage: 'gpu', label: 'Preparing systems…' });
+  await new Promise((r) => requestAnimationFrame(r));
+}
 
 const config = createConfig({
   quality,
   deterministic: capture,
+  sensitivity: lookPrefs.sensitivity,
+  fov: lookPrefs.fov,
+  invertY: lookPrefs.invertY,
 });
 config.gpu = gpu;
 console.info(
   `[grok-ops] quality=${quality}` +
-    (forcedQ ? ' (forced)' : capture ? ' (capture)' : ' (auto)') +
+    (forcedQ ? ' (forced)' : skipMenu ? (capture ? ' (capture)' : ' (auto)') : ' (briefing)') +
     ` — ${gpu.renderer || 'unknown GPU'} | score ${gpu.score} | ${gpu.reason}`
 );
-window.__GPU__ = gpu;
-if (!skipMenu) {
-  load.setMeta(
-    `${quality.toUpperCase()} · ${gpu.renderer || 'GPU'}`
-  );
-  load.setProgress(0.06, { stage: 'systems', label: 'Loading systems…' });
-}
 
 const canvas = document.getElementById('game');
-
 const engine = new Engine({ canvas, config });
+if (!skipMenu) load.bindConfig(config, engine.camera);
 
 // Registration order is irrelevant — Registry topo-sorts on static deps.
 engine
@@ -136,18 +155,44 @@ const shotApi = installShotApi(engine, { capture, lockstep });
 // cached a composited-layer raster taken at a wall-clock-dependent moment — fixed
 // in src/ui/style.js.
 if (!skipMenu) load.setProgress(WARM_LO, { stage: 'prewarm', label: 'Compiling shaders…' });
-const warmup =
-  params.get('prewarm') === '0'
-    ? { ok: false, reason: 'disabled by ?prewarm=0' }
-    : await prewarm(engine, {
-        onProgress: (t) => {
-          if (skipMenu) return;
-          const p = WARM_LO + (WARM_HI - WARM_LO) * Math.min(1, Math.max(0, t));
-          load.setProgress(p, { stage: 'prewarm', label: 'Compiling shaders…' });
-        },
-      });
+// Prewarm intensity:
+//   ?prewarm=0       off (expect mid-play hitches)
+//   ?prewarm=lite    force the low budget (fast iteration on any quality)
+//   ?prewarm=full    force the ultra budget (hitch-free, slow)
+//   omitted          derive from quality — low is lite, ultra is full
+const prewarmParam = params.get('prewarm');
+let warmup = { ok: false, reason: 'disabled by ?prewarm=0' };
+if (prewarmParam !== '0') {
+  try {
+    warmup = await prewarm(engine, {
+      mode:
+        prewarmParam === 'lite' || prewarmParam === 'minimal'
+          ? 'lite'
+          : prewarmParam === 'full' || prewarmParam === '1' || prewarmParam === 'max'
+            ? 'full'
+            : 'auto',
+      onProgress: (t) => {
+        if (skipMenu) return;
+        const p = WARM_LO + (WARM_HI - WARM_LO) * Math.min(1, Math.max(0, t));
+        load.setProgress(p, { stage: 'prewarm', label: 'Compiling shaders…' });
+      },
+    });
+  } catch (err) {
+    // A failed prewarm must not trap the player on a dead Deploy button.
+    console.error('[boot] prewarm failed', err);
+    warmup = { ok: false, reason: String(err?.message ?? err) };
+  }
+}
 console.info('[boot] prewarm', warmup);
 window.__PREWARM__ = warmup;
+// agent-browser / CDP evals often hang while the GPU is compiling, so expose a
+// lightweight signal in the document title for load benches (`?bench=1`).
+if (params.get('bench') != null) {
+  const tier = warmup?.policy?.tier ?? (warmup?.ok === false ? 'off' : '?');
+  const ms = warmup?.ms ?? 0;
+  const n = warmup?.compiled ?? 0;
+  document.title = `bench prewarm=${ms}ms tier=${tier} compiled=${n} q=${quality}`;
+}
 
 // Hold the match frozen under the title shell until Deploy. Capture / autostart
 // skip the gate and run as before.
@@ -158,6 +203,9 @@ if (!skipMenu) {
   // pointer under the title shell. Re-enabled on Deploy.
   engine.time.scale = 0;
   engine.input.enabled = false;
+  // Critical: without this, #game's cursor:none + wantPointerLock make the
+  // title shell feel broken (invisible cursor, clicks fighting the canvas).
+  engine.input.releasePointerForUi();
   player?.setControlEnabled?.(false);
   ui?.setHudVisible?.(false);
 }
@@ -170,16 +218,33 @@ engine.start();
 // engine has no loop of its own, so we hand-pump exactly this many frames and only
 // then raise __READY__; the shot is therefore always applied at engine frame 3, no
 // matter how long boot (or pre-warm) took in wall-clock terms.
-const BOOT_FRAMES = 3;
+//
+// Interactive boots (especially low) need more settle frames: compileAsync does
+// not cover every first-draw permutation, and without these the first second
+// after Deploy is the classic black-world + HUD flash while programs compile.
+const BOOT_FRAMES = lockstep
+  ? 3
+  : quality === 'low'
+    ? 36
+    : quality === 'medium'
+      ? 12
+      : 6;
 if (lockstep) {
   await shotApi.pump(BOOT_FRAMES);
 } else {
+  if (!skipMenu) {
+    load.setProgress(0.99, { stage: 'prewarm', label: 'Warming first frames…' });
+  }
   await new Promise((resolve) => {
     let warm = 0;
     const readyProbe = () => {
       if (++warm >= BOOT_FRAMES) {
         resolve();
         return;
+      }
+      if (!skipMenu && warm % 6 === 0) {
+        const t = 0.99 + 0.01 * (warm / BOOT_FRAMES);
+        load.setProgress(t, { stage: 'prewarm', label: 'Warming first frames…' });
       }
       requestAnimationFrame(readyProbe);
     };

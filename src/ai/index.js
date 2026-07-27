@@ -61,8 +61,13 @@ export class AiSystem {
     ctx.scene.add(this.root);
 
     const t0 = performance.now();
+    // Texture bake is pure CPU noise work; scale it with quality so `?q=low`
+    // is actually fast enough to iterate on gameplay instead of waiting on
+    // three 512² camo sets every boot.
+    const qName = ctx.config?.quality ?? 'medium';
+    const texSize = qName === 'low' ? 256 : qName === 'medium' ? 384 : 512;
     this.materials = new SoldierMaterials(this.rng.fork(), {
-      size: 512,
+      size: texSize,
       anisotropy: ctx.config.q.anisotropy ?? 8,
       camo: ['arid', 'woodland', 'urban'],
     });
@@ -154,7 +159,11 @@ export class AiSystem {
     // unchanged. `update()` keeps the same code as a fallback for the case where
     // the collision world is not registered yet.
     this._bootNav(ctx);
-    await this.prewarmMaterials();
+    // Depth variant is the expensive half; low quality skips it (core prewarm
+    // also skips the AI hook on low — this is the only AI warm that runs).
+    await this.prewarmMaterials({
+      depth: (ctx.config?.quality ?? 'medium') !== 'low',
+    });
   }
 
   /**
@@ -199,10 +208,17 @@ export class AiSystem {
    *
    * Idempotent and never throws — a failed prewarm just means the old stutter.
    */
-  async prewarmMaterials() {
+  /**
+   * @param {object} [opts]
+   * @param {boolean} [opts.depth=true]  also compile the skinned CSM-depth
+   *   variant. Low-quality boots skip this (~half the AI compile cost); the
+   *   first frame that casts a skinned shadow may hitch once.
+   */
+  async prewarmMaterials(opts = {}) {
     if (this._prewarmed) return this._prewarmed;
+    const wantDepth = opts.depth !== false;
     const t0 = performance.now();
-    const out = { ok: false, materials: 0, programs: 0, ms: 0 };
+    const out = { ok: false, materials: 0, programs: 0, ms: 0, depth: wantDepth };
     this._prewarmed = out;
     try {
       const mats = [];
@@ -244,7 +260,7 @@ export class AiSystem {
       await compile(this.ctx.scene);
       // cascade depth: same object, render's own override material
       const depth = r.csm?.depthMaterial;
-      if (depth) {
+      if (wantDepth && depth) {
         mesh.material = depth;
         await compile(this.ctx.scene);
       }

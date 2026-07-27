@@ -140,7 +140,13 @@
         max-width: min(28rem, 88vw);
         padding-left: 1.1rem;
         border-left: 2px solid #ffb02a;
+        transition: max-width 0.35s ease;
       }
+      #boot.boot-phase-loading .boot-panel,
+      #boot.boot-phase-ready .boot-panel {
+        max-width: min(54rem, 92vw);
+      }
+      .boot-phase[hidden] { display: none !important; }
 
       .boot-kicker {
         font-size: 0.68rem;
@@ -270,6 +276,205 @@
       }
       #boot.boot-ready .boot-hint { color: rgba(196, 210, 219, 0.42); }
 
+      /* ---- Briefing: project blurb + quality cards ---- */
+      .boot-blurb {
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        line-height: 1.55;
+        text-transform: none;
+        color: rgba(214, 227, 234, 0.72);
+        margin-bottom: 1.35rem;
+        max-width: 36rem;
+      }
+      .boot-blurb strong {
+        color: rgba(255, 220, 160, 0.92);
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .boot-section-label {
+        font-size: 0.62rem;
+        letter-spacing: 0.28em;
+        color: rgba(196, 210, 219, 0.4);
+        margin-bottom: 0.65rem;
+      }
+      .boot-q-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.55rem;
+        margin-bottom: 0.75rem;
+      }
+      @media (max-width: 520px) {
+        .boot-q-grid { grid-template-columns: 1fr; }
+      }
+      .boot-q-card {
+        appearance: none;
+        text-align: left;
+        font: inherit;
+        text-transform: uppercase;
+        cursor: pointer;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(8, 12, 18, 0.55);
+        color: inherit;
+        padding: 0.75rem 0.85rem;
+        transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+      }
+      .boot-q-card:hover {
+        border-color: rgba(255, 176, 42, 0.35);
+        background: rgba(255, 176, 42, 0.06);
+      }
+      .boot-q-card.is-on {
+        border-color: #ffb02a;
+        background: rgba(255, 176, 42, 0.12);
+        box-shadow: 0 0 18px rgba(255, 176, 42, 0.12);
+      }
+      .boot-q-card.is-locked:not(.is-on) {
+        opacity: 0.55;
+        cursor: pointer;
+      }
+      .boot-q-name {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        color: rgba(255, 230, 190, 0.95);
+        margin-bottom: 0.35rem;
+      }
+      .boot-q-tag {
+        font-size: 0.55rem;
+        letter-spacing: 0.16em;
+        color: rgba(255, 176, 42, 0.75);
+        font-weight: 600;
+      }
+      .boot-q-desc {
+        font-size: 0.62rem;
+        letter-spacing: 0.04em;
+        line-height: 1.45;
+        text-transform: none;
+        color: rgba(196, 210, 219, 0.55);
+      }
+      .boot-q-warn {
+        min-height: 1.1em;
+        margin: 0.35rem 0 0.5rem;
+        font-size: 0.62rem;
+        letter-spacing: 0.16em;
+        color: #ffb02a;
+      }
+      .boot-q-warn:empty { display: none; }
+
+      #boot-load {
+        appearance: none;
+        border: 1px solid #ffb02a;
+        background: #ffb02a;
+        color: #100b02;
+        font: inherit;
+        font-weight: 700;
+        font-size: 0.78rem;
+        letter-spacing: 0.28em;
+        padding: 0.85rem 1.9rem;
+        cursor: pointer;
+        box-shadow: 0 0 22px rgba(255, 176, 42, 0.28);
+        transition: background 0.15s, border-color 0.15s;
+      }
+      #boot-load:hover { background: #ffc251; border-color: #ffc251; }
+      #boot-load:focus-visible {
+        outline: 2px solid #ffd078;
+        outline-offset: 3px;
+      }
+
+      /* ---- Loading: progress + controls / prefs ---- */
+      .boot-load-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+        gap: 1.75rem 2.25rem;
+        align-items: start;
+      }
+      @media (max-width: 820px) {
+        .boot-load-grid { grid-template-columns: 1fr; }
+      }
+      .boot-side-block {
+        margin-bottom: 1.15rem;
+      }
+      .boot-side-block:last-child { margin-bottom: 0; }
+      .boot-controls {
+        list-style: none;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.35rem 0.85rem;
+        font-size: 0.62rem;
+        letter-spacing: 0.12em;
+        color: rgba(214, 227, 234, 0.58);
+      }
+      .boot-controls kbd {
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+        font-size: 0.58rem;
+        letter-spacing: 0.08em;
+        color: #ffb02a;
+        background: rgba(255, 176, 42, 0.08);
+        border: 1px solid rgba(255, 176, 42, 0.22);
+        padding: 0.15rem 0.4rem;
+        white-space: nowrap;
+      }
+      .boot-pref {
+        margin-bottom: 0.75rem;
+      }
+      .boot-pref-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 0.5rem;
+        margin-bottom: 0.35rem;
+        font-size: 0.6rem;
+        letter-spacing: 0.2em;
+        color: rgba(196, 210, 219, 0.45);
+      }
+      .boot-pref-val {
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+        color: rgba(255, 220, 160, 0.85);
+        letter-spacing: 0.06em;
+      }
+      .boot-pref input[type="range"] {
+        width: 100%;
+        accent-color: #ffb02a;
+        cursor: pointer;
+      }
+      .boot-seg {
+        display: flex;
+        gap: 0.35rem;
+      }
+      .boot-seg button {
+        appearance: none;
+        flex: 1;
+        font: inherit;
+        font-size: 0.62rem;
+        letter-spacing: 0.18em;
+        font-weight: 700;
+        padding: 0.45rem 0.5rem;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(8, 12, 18, 0.5);
+        color: rgba(214, 227, 234, 0.55);
+        cursor: pointer;
+        text-transform: uppercase;
+      }
+      .boot-seg button.is-on {
+        border-color: #ffb02a;
+        background: rgba(255, 176, 42, 0.14);
+        color: rgba(255, 230, 190, 0.95);
+      }
+      .boot-q-live {
+        font-size: 0.62rem;
+        letter-spacing: 0.14em;
+        color: rgba(196, 210, 219, 0.45);
+        line-height: 1.5;
+      }
+      .boot-q-live strong {
+        color: rgba(255, 220, 160, 0.9);
+        letter-spacing: 0.18em;
+      }
+
       @media (prefers-reduced-motion: reduce) {
         .boot-sky, .boot-horizon, .boot-dust, .boot-sweep, .boot-bar-glow {
           animation: none !important;
@@ -296,19 +501,93 @@
         <div class="boot-sub">Five Minute Firefight</div>
         <div class="boot-rule"></div>
 
-        <div class="boot-status">
-          <span id="boot-label">Initializing…</span>
-          <span id="boot-pct">0%</span>
+        <!-- Phase 1: what is this + pick graphics, then Load -->
+        <div id="boot-briefing" class="boot-phase">
+          <p class="boot-blurb">
+            <strong>Grok Ops</strong> is a short browser gunfight — one AO, real
+            feel, no asset download circus. Everything is procedural: world,
+            weapons, enemies, audio. Pick a graphics tier that matches your
+            machine, then load the match. Low boots fast for tinkering; ultra
+            is the full show.
+          </p>
+          <div class="boot-section-label">Graphics</div>
+          <div class="boot-q-grid" id="boot-quality" role="radiogroup" aria-label="Graphics quality"></div>
+          <p class="boot-q-warn" id="boot-q-warn" role="status"></p>
+          <div class="boot-actions">
+            <button type="button" id="boot-load">Load</button>
+            <span class="boot-hint" id="boot-brief-hint">Select a tier, then load</span>
+          </div>
         </div>
-        <div class="boot-bar" aria-hidden="true">
-          <div class="boot-bar-fill" id="boot-fill"></div>
-          <div class="boot-bar-glow"></div>
-        </div>
-        <div class="boot-meta" id="boot-meta"></div>
 
-        <div class="boot-actions">
-          <button type="button" id="boot-deploy" disabled>Deploy</button>
-          <span class="boot-hint" id="boot-hint">Building the AO</span>
+        <!-- Phase 2–3: load progress + controls/settings, then Deploy -->
+        <div id="boot-loading" class="boot-phase" hidden>
+          <div class="boot-load-grid">
+            <div class="boot-load-main">
+              <div class="boot-status">
+                <span id="boot-label">Loading…</span>
+                <span id="boot-pct">0%</span>
+              </div>
+              <div class="boot-bar" aria-hidden="true">
+                <div class="boot-bar-fill" id="boot-fill"></div>
+                <div class="boot-bar-glow"></div>
+              </div>
+              <div class="boot-meta" id="boot-meta"></div>
+
+              <div class="boot-side-block" style="margin-top:1.25rem">
+                <div class="boot-section-label">Graphics (locked)</div>
+                <div class="boot-q-grid" id="boot-quality-locked" role="group" aria-label="Graphics quality locked"></div>
+                <p class="boot-q-warn" id="boot-q-warn-load" role="status"></p>
+                <p class="boot-q-live" id="boot-q-live"></p>
+              </div>
+
+              <div class="boot-actions">
+                <button type="button" id="boot-deploy" disabled>Deploy</button>
+                <span class="boot-hint" id="boot-hint">Building the AO</span>
+              </div>
+            </div>
+
+            <div class="boot-load-side">
+              <div class="boot-side-block">
+                <div class="boot-section-label">Controls</div>
+                <ul class="boot-controls">
+                  <li><kbd>WASD</kbd></li><li>Move</li>
+                  <li><kbd>Mouse</kbd></li><li>Look · LMB fire · RMB ADS</li>
+                  <li><kbd>Shift</kbd></li><li>Sprint</li>
+                  <li><kbd>Ctrl</kbd> / <kbd>C</kbd></li><li>Crouch</li>
+                  <li><kbd>Space</kbd></li><li>Jump</li>
+                  <li><kbd>R</kbd></li><li>Reload</li>
+                  <li><kbd>Q</kbd> / <kbd>E</kbd></li><li>Lean</li>
+                  <li><kbd>G</kbd></li><li>Grenade</li>
+                  <li><kbd>Esc</kbd></li><li>Pause / settings</li>
+                </ul>
+              </div>
+
+              <div class="boot-side-block">
+                <div class="boot-section-label">Look settings</div>
+                <div class="boot-pref">
+                  <div class="boot-pref-head">
+                    <span>Sensitivity</span>
+                    <span class="boot-pref-val" id="boot-sens-val">1.00</span>
+                  </div>
+                  <input type="range" id="boot-sens" min="0.2" max="3" step="0.01" value="1" />
+                </div>
+                <div class="boot-pref">
+                  <div class="boot-pref-head">
+                    <span>Field of view</span>
+                    <span class="boot-pref-val" id="boot-fov-val">80</span>
+                  </div>
+                  <input type="range" id="boot-fov" min="65" max="120" step="1" value="80" />
+                </div>
+                <div class="boot-pref">
+                  <div class="boot-pref-head"><span>Invert look</span></div>
+                  <div class="boot-seg" id="boot-invert" role="group" aria-label="Invert look">
+                    <button type="button" data-inv="0" class="is-on">Off</button>
+                    <button type="button" data-inv="1">On</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

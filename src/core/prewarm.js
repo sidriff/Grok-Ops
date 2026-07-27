@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 /**
  * Shader pre-warm.
  *
@@ -17,16 +19,21 @@
  * happens, so it touches no material parameters, no camera, no lighting state.
  * The pixel-diff gate (tools/imagediff.mjs) enforces that.
  *
+ * QUALITY-TIERED BUDGET — full warm was measured at ~37 s on a 5070 Ti (render
+ * hook ~12 s, world depth/prepass ~12 s, multi-pose compileAsync ~10 s). That is
+ * correct for shipping high/ultra, but it blocks gameplay iteration. Low (and
+ * the explicit `?prewarm=lite` override) skips multi-pose and world override
+ * compiles so boot lands in a few seconds; medium is a middle ground; high/ultra
+ * keep the exhaustive path. Skipped permutations may hitch the first time they
+ * draw — acceptable while iterating on `?q=low`.
+ *
  * Two mechanisms, because neither alone is sufficient:
  *
  *  1. renderer.compileAsync() — uses KHR_parallel_shader_compile where available,
  *     so it compiles off the main thread and does not block. Covers the forward
  *     lit pass for everything currently in a scene graph.
- *  2. Real frames from representative poses — compileAsync does NOT cover the
- *     depth/shadow-map variant of a material, nor the post-processing chain,
- *     nor permutations that only exist once a subsystem has spawned its transient
- *     objects (particles, decals, ragdolls, muzzle flash). Actually drawing a
- *     handful of frames is the only way to reach those.
+ *  2. Subsystem `prewarmMaterials()` hooks — reach CSM depth, MRT prepass, post
+ *     chain, and skinned character variants that compileAsync alone cannot.
  */
 
 /** Poses chosen to span the level's lighting and material variety, so the
@@ -37,23 +44,6 @@ const WARM_POSES = [
   { pos: [3.2, 1.35, 5.0], look: [1.4, 1.1, 2.2] }, // close material detail
   { pos: [4, 1.7, 12], look: [-6, 1.7, -4] }, // combat staging
 ];
-
-/**
- * Force every shader permutation to compile before gameplay starts.
- * Resolves once warm. Never throws — a failed pre-warm must not block boot,
- * it just means the old stutter comes back.
- */
-/**
- * @param opts.transients  Stage each subsystem's spawned objects (enemies, impact
- *   bursts, muzzle flash) so their programs compile too. MEASURED TO BE UNSAFE and
- *   therefore off by default: the pixel-diff gate showed up-to-254/255 channel
- *   deltas afterwards, because decals live in a persistent ring buffer and spawned
- *   actors are not despawned by any hook reachable from here. Reaching the
- *   remaining permutations safely needs a `prewarmMaterials()` on each subsystem
- *   that builds and compiles its materials WITHOUT spawning gameplay objects —
- *   which is owned by those subsystems, not by core.
- */
-import * as THREE from 'three';
 
 /**
  * Subsystems whose `prewarmMaterials()` must NOT be driven from here.
@@ -73,35 +63,95 @@ const SELF_WARMING = new Set(['fx']);
  * Whether to let `render.prewarmMaterials()` run its CSM-depth + MRT-prepass step.
  *
  * OFF, and it is the one thing in this file that was MEASURED not to be
- * pixel-neutral. Unlike every other step here, that one does not compile — it
- * actually *runs* the two depth passes, writing the shadow array and the gbuffer.
- * `render` reports it as clean when invoked standalone at frame 0; driven from
- * here (after every subsystem has init'd, with the camera restored to the real
- * spawn pose) it is not. Bisected against shots/perf-base with everything else in
- * place, one variable at a time:
- *
- *   render-only tree, no hooks .................. identical, 0 px
- *   + ragdoll sleep skip ........................ identical, 0 px
- *   + all hooks, shadow:false ................... identical, 0 px
- *   + all hooks, shadow:true .... detail/impacts/muzzle/night/weapon changed,
- *                                 0.005-0.017% of pixels, maxDelta 1
- *
- * Run-to-run noise was verified at exactly zero first (two captures of the same
- * tree were bit-identical), so those deltas are the change, not the harness.
- *
- * Little is lost: the override-material variants are reached anyway, without
- * drawing, by `world.prewarmMaterials()` (which compiles the level under
- * `csm.depthMaterial` and `gbuffer.material` via `scene.overrideMaterial`) and by
- * `ai.prewarmMaterials()` (which borrows render's depth override for the
- * characters). The gate outranks the last few programs.
+ * pixel-neutral. World + AI hooks reach those variants via override compile
+ * instead. See git history / comments on RENDER_SHADOW_WARM for the bisect.
  */
 const RENDER_SHADOW_WARM = false;
 
-export async function prewarm(engine, { onProgress = () => {}, transients = false, drawFrames = false } = {}) {
+/**
+ * Prewarm intensity by quality tier (or explicit override).
+ *
+ * @param {string} quality  engine config quality name
+ * @param {'auto'|'lite'|'full'|string|null} [mode]
+ *   `auto`  — derive from quality
+ *   `lite`  — force the low budget (fast iteration)
+ *   `full`  — force the ultra budget (capture / hitch-free)
+ */
+export function resolvePrewarmPolicy(quality, mode = 'auto') {
+  const tier =
+    mode === 'lite' || mode === '0' || mode === 'minimal'
+      ? 'low'
+      : mode === 'full' || mode === '1' || mode === 'max'
+        ? 'ultra'
+        : quality || 'medium';
+
+  switch (tier) {
+    case 'low':
+      // Gameplay iteration path. Skip multi-pose walks and the redundant AI
+      // hook (AI already warms in init). Still warm world depth + prepass once —
+      // skipping those left a black world / HUD-only flash after Deploy while
+      // cascades and the gbuffer compiled on first draw. Post stack on low is
+      // already tiny (no TAA/GTAO/SSR).
+      return {
+        tier: 'low',
+        poses: 0,
+        render: { post: true, shadow: false },
+        world: { forward: true, overrides: ['depth', 'prepass'] },
+        ai: false,
+      };
+    case 'medium':
+      // Middle ground: one representative pose, world CSM-depth only (skip the
+      // second full-level prepass compile), AI hook still skipped (init covers it).
+      return {
+        tier: 'medium',
+        poses: 1,
+        render: { post: true, shadow: false },
+        world: { forward: true, overrides: ['depth'] },
+        ai: false,
+      };
+    case 'high':
+      return {
+        tier: 'high',
+        poses: 2,
+        render: { post: true, shadow: false },
+        world: { forward: true, overrides: ['depth', 'prepass'] },
+        ai: true,
+      };
+    default:
+      return {
+        tier: 'ultra',
+        poses: WARM_POSES.length,
+        render: { post: true, shadow: RENDER_SHADOW_WARM },
+        world: { forward: true, overrides: ['depth', 'prepass'] },
+        ai: true,
+      };
+  }
+}
+
+/**
+ * Force shader permutations to compile before gameplay starts.
+ * Resolves once warm. Never throws — a failed pre-warm must not block boot,
+ * it just means the old stutter comes back.
+ *
+ * @param opts.transients  Stage each subsystem's spawned objects (enemies, impact
+ *   bursts, muzzle flash) so their programs compile too. MEASURED TO BE UNSAFE and
+ *   therefore off by default: the pixel-diff gate showed up-to-254/255 channel
+ *   deltas afterwards.
+ * @param opts.mode  'auto' | 'lite' | 'full' — see resolvePrewarmPolicy
+ * @param opts.policy  explicit policy object; wins over mode/quality when set
+ */
+export async function prewarm(
+  engine,
+  { onProgress = () => {}, transients = false, drawFrames = false, mode = 'auto', policy: policyIn } = {}
+) {
   const t0 = performance.now();
   const render = engine.ctx.peek('render');
   const renderer = render?.renderer;
   if (!renderer) return { ok: false, reason: 'no renderer' };
+
+  const quality = engine.config?.quality ?? engine.ctx?.config?.quality ?? 'medium';
+  const policy = policyIn ?? resolvePrewarmPolicy(quality, mode);
+  const poses = WARM_POSES.slice(0, Math.max(0, policy.poses | 0));
 
   const programsBefore = renderer.info.programs?.length ?? 0;
   const cam = engine.camera;
@@ -117,15 +167,6 @@ export async function prewarm(engine, { onProgress = () => {}, transients = fals
   const savedRng = { s0: r.s0, s1: r.s1, s2: r.s2, s3: r.s3, spare: r._spare };
   const savedAccum = engine._accum;
 
-  // Subsystems whose materials only exist once they have spawned something.
-  // These are the public debug hooks ARCHITECTURE.md already defines for the
-  // capture harness; using them here costs nothing and reaches the transient
-  // material permutations (particles, decals, ragdolls, flash, HUD layers).
-  // Only kinds the subsystems actually implement — verified by reading their
-  // sources, not guessed. fx.debugBurst understands 'explosion' | 'muzzle' |
-  // 'combat' and a default wall burst; anything else falls through to the same
-  // default, so enumerating surface names buys nothing. weapons.debugPose
-  // understands 'idle' | 'ads' | 'fire'.
   const transientStages = [
     () => engine.ctx.peek('ai')?.debugStage?.('firefight'),
     () => engine.ctx.peek('fx')?.debugBurst?.('wall'),
@@ -141,127 +182,118 @@ export async function prewarm(engine, { onProgress = () => {}, transients = fals
   // and `toneMapping` into the program cache key and reads BOTH off the currently
   // bound target. With the canvas bound (the default here) every program compiled
   // is the `srgb` + tone-mapped variant — but the world and the viewmodel are both
-  // drawn into HDR targets, which need `srgb-linear` + NoToneMapping. Measured by
-  // src/materials and src/fx independently: 25 of 47 pre-warmed programs were the
-  // unused canvas variant, and the real ones still compiled during the first
-  // frames of play. A 1x1 target is enough to get the right key; nothing is ever
-  // rendered into it. Restored in the caller's `finally`.
+  // drawn into HDR targets, which need `srgb-linear` + NoToneMapping. A 1x1 target
+  // is enough to get the right key; nothing is ever rendered into it.
   const scratchRt = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false, stencilBuffer: false });
   const prevRt = renderer.getRenderTarget();
   const prevFace = renderer.getActiveCubeFace?.() ?? 0;
   const prevMip = renderer.getActiveMipmapLevel?.() ?? 0;
 
   const compile = async () => {
-    // compileAsync is non-blocking where KHR_parallel_shader_compile exists.
     renderer.setRenderTarget(scratchRt);
     try {
       await renderer.compileAsync(engine.scene, engine.camera);
       await renderer.compileAsync(engine.viewScene, engine.viewCamera);
     } catch {
-      // Older three or a driver without the extension — fall back to sync.
       try {
         renderer.compile(engine.scene, engine.camera);
         renderer.compile(engine.viewScene, engine.viewCamera);
-      } catch { /* nothing more we can do; boot must still proceed */ }
+      } catch {
+        /* nothing more we can do; boot must still proceed */
+      }
     } finally {
       renderer.setRenderTarget(prevRt, prevFace, prevMip);
     }
   };
 
-  const yieldFrame = () => new Promise((r) => requestAnimationFrame(r));
+  const yieldFrame = () => new Promise((res) => requestAnimationFrame(res));
 
   try {
     let step = 0;
-    // Hook count is known after we scan; we over-count by a safe upper bound so
-    // progress never jumps backwards when hooks are discovered mid-pass.
     const hookBudget = 6;
     const totalSteps =
-      WARM_POSES.length * 2 + hookBudget + (transients ? transientStages.length : 0) + 1;
+      Math.max(1, poses.length * 2) + hookBudget + (transients ? transientStages.length : 0) + 1;
     const tick = () => onProgress(Math.min(1, ++step / totalSteps));
 
-    // Pass 1: compile the static world from each pose, with the depth/shadow
-    // variants reached by drawing a real frame at that pose.
-    for (const p of WARM_POSES) {
-      cam.position.set(...p.pos);
-      cam.lookAt(...p.look);
-      cam.updateMatrixWorld(true);
-      await compile();
+    // Pass 1: multi-pose forward compile. Skipped entirely on low (poses=0) —
+    // the render hook still does one compile at the real spawn pose.
+    if (poses.length === 0) {
       tick();
-      // Drawing real frames here would reach the depth/shadow and post-processing
-      // variants too, but engine.step() advances every subsystem's internal state
-      // (AI transforms, exposure adaptation, particle cursors) and NONE of that is
-      // restorable from core. The pixel gate measured up-to-180/255 deltas from it.
-      // So this is opt-in and off: compileAsync only, which mutates nothing.
-      if (drawFrames) {
-        engine.step();
-        await yieldFrame();
-        engine.step();
-        await yieldFrame();
+    } else {
+      for (const p of poses) {
+        cam.position.set(...p.pos);
+        cam.lookAt(...p.look);
+        cam.updateMatrixWorld(true);
+        await compile();
+        tick();
+        if (drawFrames) {
+          engine.step();
+          await yieldFrame();
+          engine.step();
+          await yieldFrame();
+        }
+        tick();
       }
-      tick();
     }
 
-    // Pass 1b: THE SUBSYSTEM HOOKS. This is the `prewarmMaterials()` contract the
-    // doc comment above says is missing — "a prewarmMaterials() on each subsystem
-    // that builds and compiles its materials WITHOUT spawning gameplay objects".
-    // It is now implemented by render, world and ai, and it reaches exactly what
-    // `compileAsync(scene, camera)` provably cannot:
-    //
-    //   render  the CSM depth pass, the MRT prepass and the ~13 full-screen post
-    //           materials (blitted into a 4x4 scratch). +34-40 programs.
-    //   world   the CSM-depth and prepass override variants of the level geometry,
-    //           in their plain / instanced / instanced+instanceColor flavours,
-    //           compiled at the stabilised light count. +35 programs.
-    //   ai      the 26 character materials and their skinned + depth variants,
-    //           against a dummy SkinnedMesh on the real skeleton. +7 programs.
-    //           (ai also calls this itself at the end of init(); it is idempotent.)
-    //
-    // None of them draws a gameplay frame, steps the engine, touches the clock or
-    // the RNG, so none of the restore machinery above applies to them — which is
-    // why this replaces the `drawFrames` option rather than extending it.
-    //
-    // The camera goes back to its real pose FIRST: render's hook runs the shadow
-    // and prepass passes for real (at frame 0, where it is pixel-clean), and there
-    // is no reason to fit the cascades to a warm-up pose the game never uses.
+    // Pass 1b: subsystem hooks, filtered by policy.
     cam.position.copy(saved.pos);
     cam.quaternion.copy(saved.quat);
     cam.fov = saved.fov;
     cam.updateProjectionMatrix();
     cam.updateMatrixWorld(true);
 
-    // render goes first, deliberately: it patches every lit material with the
-    // CSM/AO/SSR injection, and a program compiled off an UNPATCHED material is
-    // thrown away by the first frame that walks the scene.
     const hooks = [];
     const renderSys = engine.registry.peek?.('render');
-    if (renderSys && typeof renderSys.prewarmMaterials === 'function') hooks.push(renderSys);
+    if (policy.render && renderSys && typeof renderSys.prewarmMaterials === 'function') {
+      hooks.push({ sys: renderSys, kind: 'render' });
+    }
     for (const sys of engine.registry.ordered ?? []) {
       if (sys === renderSys) continue;
-      if (SELF_WARMING.has(sys.constructor?.id)) continue;
-      if (typeof sys.prewarmMaterials === 'function') hooks.push(sys);
+      const id = sys.constructor?.id;
+      if (SELF_WARMING.has(id)) continue;
+      if (typeof sys.prewarmMaterials !== 'function') continue;
+      if (id === 'world' && !policy.world) continue;
+      if (id === 'ai' && !policy.ai) continue;
+      // Unknown subsystems with the hook still run on high/ultra only.
+      if (id !== 'world' && id !== 'ai' && policy.tier === 'low') continue;
+      hooks.push({ sys, kind: id });
     }
+
     const hookResults = {};
-    for (const sys of hooks) {
-      const id = sys.constructor?.id ?? '?';
+    for (const { sys, kind } of hooks) {
+      const id = sys.constructor?.id ?? kind ?? '?';
       try {
-        const arg = sys === renderSys ? { post: true, shadow: RENDER_SHADOW_WARM } : engine.ctx;
+        let arg;
+        if (id === 'render') {
+          arg = {
+            post: policy.render?.post !== false,
+            shadow: !!(policy.render?.shadow ?? RENDER_SHADOW_WARM),
+          };
+        } else if (id === 'world' && policy.world && typeof policy.world === 'object') {
+          arg = { ...policy.world, ctx: engine.ctx };
+        } else if (id === 'ai') {
+          arg = { depth: policy.tier !== 'low' };
+        } else {
+          arg = engine.ctx;
+        }
         hookResults[id] = (await sys.prewarmMaterials(arg)) ?? { ok: true };
       } catch (err) {
-        // An optional hook must never be able to block boot.
         hookResults[id] = { ok: false, reason: String(err?.message ?? err) };
       }
       tick();
-      // Yield so the boot progress bar can paint between long compile hooks.
       await yieldFrame();
     }
-    // Consume any unused hook budget so the bar still lands cleanly.
     for (let i = hooks.length; i < hookBudget; i++) tick();
     engine.__prewarmHooks = hookResults;
 
-    // Pass 2: spawn each subsystem's transient objects and compile those too.
-    // Gated: see the `transients` option doc — this pass is not pixel-transparent.
-    for (const spawn of (transients ? transientStages : [])) {
-      try { spawn(); } catch { /* subsystem may not implement the hook */ }
+    // Pass 2: transients (off by default — not pixel-transparent).
+    for (const spawn of transients ? transientStages : []) {
+      try {
+        spawn();
+      } catch {
+        /* optional */
+      }
       engine.step();
       await yieldFrame();
       await compile();
@@ -271,14 +303,19 @@ export async function prewarm(engine, { onProgress = () => {}, transients = fals
     }
     tick();
   } finally {
-    // Restore exactly what we found. Any residue here would be a visual change.
-    for (const reset of (transients ? [
-      () => engine.ctx.peek('fx')?.debugBurst?.('none'),
-      () => engine.ctx.peek('weapons')?.debugPose?.('idle'),
-      () => engine.ctx.peek('ui')?.debugState?.('clean'),
-      () => engine.ctx.peek('ai')?.debugStage?.('none'),
-    ] : [])) {
-      try { reset(); } catch { /* optional hook */ }
+    for (const reset of transients
+      ? [
+          () => engine.ctx.peek('fx')?.debugBurst?.('none'),
+          () => engine.ctx.peek('weapons')?.debugPose?.('idle'),
+          () => engine.ctx.peek('ui')?.debugState?.('clean'),
+          () => engine.ctx.peek('ai')?.debugStage?.('none'),
+        ]
+      : []) {
+      try {
+        reset();
+      } catch {
+        /* optional */
+      }
     }
     cam.position.copy(saved.pos);
     cam.quaternion.copy(saved.quat);
@@ -301,6 +338,7 @@ export async function prewarm(engine, { onProgress = () => {}, transients = fals
   const programsAfter = renderer.info.programs?.length ?? 0;
   return {
     ok: true,
+    policy,
     hooks: engine.__prewarmHooks,
     ms: Math.round(performance.now() - t0),
     programsBefore,

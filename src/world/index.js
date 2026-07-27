@@ -353,7 +353,28 @@ export class WorldSystem {
    * mutations are `scene.overrideMaterial` and the ballast light visibility,
    * both restored in the `finally`.
    */
-  async prewarmMaterials(ctx = this.ctx) {
+  /**
+   * @param {object} [opts]
+   * @param {object} [opts.ctx]  engine context (also accepted as the sole arg for
+   *   back-compat with older `prewarmMaterials(ctx)` call sites)
+   * @param {boolean} [opts.forward=true]  compile the forward-lit world scene
+   * @param {Array<'depth'|'prepass'>|null} [opts.overrides]
+   *   which override-material passes to compile. Default: both depth + prepass.
+   *   Pass `[]` to skip overrides (quality-tiered prewarm on medium can request
+   *   only `['depth']`; low skips this hook entirely — see src/core/prewarm.js).
+   */
+  async prewarmMaterials(opts = {}) {
+    // Back-compat: older callers passed the engine ctx as the first argument.
+    const ctx =
+      opts && typeof opts === 'object' && (opts.scene || opts.peek || opts.get)
+        ? opts
+        : opts.ctx ?? this.ctx;
+    const forward = opts.forward !== false;
+    const overrides =
+      opts.overrides === undefined || opts.overrides === null
+        ? ['depth', 'prepass']
+        : opts.overrides;
+
     const render = ctx.peek?.('render') ?? ctx.get?.('render');
     const renderer = render?.renderer;
     if (!renderer) return { ok: false, reason: 'no renderer' };
@@ -370,13 +391,19 @@ export class WorldSystem {
     // the distance cull happens to have left visible during boot.
     this._stabiliseLightCount(ctx);
 
+    const overrideMat = {
+      depth: render.csm?.depthMaterial,
+      prepass: render.gbuffer?.material,
+    };
+
     const prevOverride = scene.overrideMaterial;
     try {
-      // 1. forward lit pass.
-      await this._compile(renderer, scene, camera);
-      // 2. the shadow cascades and 3. the depth/normal/velocity prepass, both of
-      //    which draw this same geometry through an override material.
-      for (const over of [render.csm?.depthMaterial, render.gbuffer?.material]) {
+      if (forward) await this._compile(renderer, scene, camera);
+      // CSM cascades + depth/normal/velocity prepass — each is a full-level
+      // compileAsync of every plain/instanced/instanceColor flavour. That is
+      // the ~12 s wall on high/ultra; quality policy can drop either or both.
+      for (const key of overrides) {
+        const over = overrideMat[key];
         if (!over) continue;
         scene.overrideMaterial = over;
         await this._compile(renderer, scene, camera);
@@ -390,6 +417,8 @@ export class WorldSystem {
       ms: Math.round(performance.now() - t0),
       compiled: (renderer.info.programs?.length ?? 0) - before,
       lightTarget: this._lightTarget,
+      forward,
+      overrides: [...overrides],
     };
   }
 

@@ -8,7 +8,7 @@ Fork of [Claude of Duty](https://github.com/mshumer/Claude-of-Duty) (mshumer) �
 
 ```bash
 bun install
-bun run dev          # http://127.0.0.1:5173  (HMR off — refresh for changes)
+bun run dev          # http://127.0.0.1:5173 (or next free port; HMR off — refresh for changes)
 OW_HMR=1 bun run dev # optional: classic Vite hot reload
 ```
 

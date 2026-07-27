@@ -13,11 +13,18 @@ export default defineConfig({
   // which the capture harness (127.0.0.1) cannot reach.
   server: {
     host: '127.0.0.1',
-    port: 5173,
-    strictPort: true,
+    // Prefer 5173, but if another worktree/checkout already owns it, walk up
+    // until something is free. Capture/profile harnesses that need a fixed
+    // port pass `--port N --strictPort` themselves.
+    port: Number(process.env.PORT) || 5173,
+    strictPort: false,
     hmr: hmrEnabled ? undefined : false,
   },
-  preview: { host: '127.0.0.1' },
+  preview: {
+    host: '127.0.0.1',
+    port: Number(process.env.PREVIEW_PORT) || 4173,
+    strictPort: false,
+  },
   build: { target: 'es2022', sourcemap: true, chunkSizeWarningLimit: 4096 },
   // Large binary game assets served verbatim.
   assetsInclude: ['**/*.ktx2', '**/*.hdr', '**/*.exr', '**/*.bin', '**/*.glb'],

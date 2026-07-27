@@ -19,6 +19,12 @@ export const UNITS = {
 };
 
 export const QUALITY_PRESETS = {
+  /**
+   * Fast iteration tier. Prewarm is lite (forward + existing post only — no
+   * multi-pose walk, no world depth/prepass compile wall). Expect possible
+   * first-use shader hitches on shadows/prepass; use medium+ or `?prewarm=full`
+   * when hunting hitches. Boot with `?q=low`.
+   */
   low: {
     renderScale: 0.72,
     /** Cap devicePixelRatio so internal buffers stay sane on Retina/4K. */
