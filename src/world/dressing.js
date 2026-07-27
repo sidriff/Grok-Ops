@@ -2041,12 +2041,9 @@ export function buildGate(A, rng) {
   };
 
   // ------------------------------------------------------- the four masses --
-  // west gatehouse block: lowest, with an upper loggia of three dark openings
+  // Solid faces only — no gateAperture window voids (same one-sided grey-back
+  // problem as facade windows: open from the street, metal/void from reverse).
   block(xL0, xL1, hL, t, z);
-  for (let i = 0; i < 3; i++) {
-    gateAperture(A, rng, xL0 + 1.0 + i * ((xL1 - xL0 - 2.0) / 2), hL * 0.66, z, 0.9, 1.5, t);
-  }
-  gateAperture(A, rng, (xL0 + xL1) / 2, hL * 0.3, z, 1.1, 1.3, t);
   merlonRun(A, rng, xL0, xL1, z, t, hL);
 
   // east block: nearly two metres taller and half a metre proud, so the skyline
@@ -2054,18 +2051,12 @@ export function buildGate(A, rng) {
   const zR = z + eastProud / 2;
   const tR = t + eastProud;
   block(xR0, xR1, hR, tR, zR, { key: 'plaster_blue' });
-  gateAperture(A, rng, (xR0 + xR1) / 2, hR * 0.62, zR, 1.0, 1.6, tR);
-  gateAperture(A, rng, (xR0 + xR1) / 2, hR * 0.34, zR, 0.85, 1.2, tR);
   merlonRun(A, rng, xR0, xR1, zR, tR, hR, { key: 'plaster_blue' });
 
   // the tower: tallest, and standing proud toward the camera so it casts across
   // the east block and the arch — the depth cue that carries the whole vista
   const zT = z + towerProud / 2;
   block(xT0, xT1, hT, t + towerProud, zT, { key: 'plaster_cream' });
-  for (let i = 0; i < 3; i++) {
-    gateAperture(A, rng, (xT0 + xT1) / 2 + (i - 1) * 1.05, hT * 0.55 + (i === 1 ? 0.25 : 0), zT, 0.5, i === 1 ? 1.5 : 1.1, t + towerProud);
-  }
-  gateAperture(A, rng, (xT0 + xT1) / 2, hT * 0.8, zT, 1.5, 1.0, t + towerProud, { recess: 0.75 });
   merlonRun(A, rng, xT0, xT1, z + towerProud / 2, t + towerProud, hT, { key: 'plaster_cream' });
   // a bent aerial on the tower: breaks the hard corner against the sky
   A.add('metal_rust', BOX(A), LL(IDENT, xT1 - 0.5, hT + 1.9, zT, 0, 0.06, 3.4, 0.06, 0.04, 0.07), {

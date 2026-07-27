@@ -2,8 +2,6 @@ import * as THREE from 'three';
 import { Rng } from '../core/rng.js';
 import {
   facadeWall,
-  windowUnit,
-  windowState,
   doorUnit,
   shopfront,
   balcony,
@@ -297,13 +295,11 @@ function buildFacade(A, rng, spec, info, ctx) {
         const shopHere = spec.shops !== false && room > 2.0 && rng.float() < (street ? 0.5 : 0.25);
         if (spec.doorBays?.[side] === b) kind = 'door';
         else if (shopHere) kind = 'shop';
-        else if (rng.float() < 0.72) kind = 'window';
-      } else if (rng.float() < 0.4) kind = 'window';
-    } else {
-      if (rng.float() < (openFace ? 0.88 : 0.6)) {
-        kind = spec.arches && f === 1 ? 'arch' : 'window';
-        if (openFace && f >= 1 && rng.float() < (spec.balconies ?? 0.35)) kind = 'balconyDoor';
+        // Windows intentionally omitted: one-sided open + grey void/metal back
+        // planes read as blocked from the reverse side and clutter every facade.
       }
+    } else {
+      if (openFace && f >= 1 && rng.float() < (spec.balconies ?? 0.35)) kind = 'balconyDoor';
     }
     if (ruinTop && rng.float() < 0.5) kind = kind === 'blank' ? 'blank' : 'ragged';
 
@@ -316,6 +312,8 @@ function buildFacade(A, rng, spec, info, ctx) {
     let forced = spec.bayKinds?.[side]?.[f]?.[b];
     if (typeof forced === 'string') forced = { kind: forced };
     if (forced) kind = forced.kind;
+    // Drop window/arch even if forced — same one-sided grey-back issue.
+    if (kind === 'window' || kind === 'arch') kind = 'blank';
 
     switch (kind) {
       case 'door': {
@@ -350,50 +348,6 @@ function buildFacade(A, rng, spec, info, ctx) {
           );
           info.awnings.push({ side, x: bx, y: o.y + o.h / 2 + 0.55, w: aw, pm });
         }
-        break;
-      }
-      case 'window': {
-        const ww = Math.min(room, rng.range(1.05, 1.3));
-        const wh = f === 0 ? 1.62 : 1.48;
-        const o = { x: bx, y: (f === 0 ? 1.05 : 0.95) + wh / 2, w: ww, h: wh, kind };
-        openings.push(o);
-        const broken = rng.float() < (spec.damage ?? 0.15) * 1.6;
-        // One window per bay is not the same window per bay: pick a state so the
-        // facade carries open casements, boarded holes, shut louvres, curtains and
-        // the occasional lit room instead of one repeated glazed panel.
-        const st = broken ? 'open' : windowState(rng, f, spec.damage ?? 0.15, { allowLit: !openFace || f > 0 });
-        deco.push(() =>
-          windowUnit(A, pm, o, rng, {
-            t,
-            broken,
-            state: st,
-            back: !spec.enterable,
-            grille: f === 0 && st !== 'boarded' && rng.float() < 0.55,
-            shutters: f > 0 && (st === 'shuttered' || rng.float() < 0.4),
-            shutterKey: spec.shutterKey ?? rng.pick(['metal_blue', 'metal_green', 'wood_dark']),
-            curtain: st === 'curtain' || (st === 'glazed' && rng.float() < 0.25),
-          })
-        );
-        info.windows.push({ side, f, x: bx, y: o.y, w: ww, h: wh, pm, state: st });
-        break;
-      }
-      case 'arch': {
-        const ww = Math.min(room, 1.35);
-        const o = { x: bx, y: 1.05 + 0.9, w: ww, h: 1.9, arch: 0.62, kind };
-        openings.push(o);
-        const st = windowState(rng, f, spec.damage ?? 0.15);
-        deco.push(() =>
-          windowUnit(A, pm, o, rng, {
-            t,
-            broken: rng.float() < 0.2,
-            state: st,
-            back: !spec.enterable,
-            shutters: false,
-            curtain: st === 'curtain' || rng.float() < 0.3,
-            lintel: false,
-          })
-        );
-        info.windows.push({ side, f, x: bx, y: o.y, w: ww, h: o.h, pm, state: st });
         break;
       }
       case 'balconyDoor': {
