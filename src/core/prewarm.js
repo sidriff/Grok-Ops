@@ -21,11 +21,11 @@ import * as THREE from 'three';
  *
  * QUALITY-TIERED BUDGET — full warm was measured at ~37 s on a 5070 Ti (render
  * hook ~12 s, world depth/prepass ~12 s, multi-pose compileAsync ~10 s). That is
- * correct for shipping high/ultra, but it blocks gameplay iteration. Low (and
- * the explicit `?prewarm=lite` override) skips multi-pose and world override
- * compiles so boot lands in a few seconds; medium is a middle ground; high/ultra
- * keep the exhaustive path. Skipped permutations may hitch the first time they
- * draw — acceptable while iterating on `?q=low`.
+ * correct for shipping high/ultra. Default `?q=low` now biases toward hitch
+ * reduction (street+interior poses, world depth/prepass, light-settled recompile,
+ * short combat stage). Use `?prewarm=lite` when you want the old few-second boot
+ * and can tolerate first-use compiles. medium is a middle ground; high/ultra keep
+ * the exhaustive path.
  *
  * Two mechanisms, because neither alone is sufficient:
  *
@@ -74,40 +74,52 @@ const RENDER_SHADOW_WARM = false;
  * @param {string} quality  engine config quality name
  * @param {'auto'|'lite'|'full'|string|null} [mode]
  *   `auto`  — derive from quality
- *   `lite`  — force the low budget (fast iteration)
+ *   `lite`  — force minimal budget (fastest boot; more mid-play hitches)
  *   `full`  — force the ultra budget (capture / hitch-free)
  */
 export function resolvePrewarmPolicy(quality, mode = 'auto') {
   const tier =
     mode === 'lite' || mode === '0' || mode === 'minimal'
-      ? 'low'
+      ? 'minimal'
       : mode === 'full' || mode === '1' || mode === 'max'
         ? 'ultra'
         : quality || 'medium';
 
   switch (tier) {
-    case 'low':
-      // Gameplay iteration path. Skip multi-pose walks and the redundant AI
-      // hook (AI already warms in init). Still warm world depth + prepass once —
-      // skipping those left a black world / HUD-only flash after Deploy while
-      // cascades and the gbuffer compiled on first draw. Post stack on low is
-      // already tiny (no TAA/GTAO/SSR).
+    case 'minimal':
+      // Fastest boot for agent loops / `?prewarm=lite`. Expect first-use hitches.
       return {
-        tier: 'low',
+        tier: 'minimal',
         poses: 0,
         render: { post: true, shadow: false },
         world: { forward: true, overrides: ['depth', 'prepass'] },
         ai: false,
+        settle: false,
+        stageCombat: false,
+      };
+    case 'low':
+      // Hitch-reduced iteration default for `?q=low`. Covers the permutations
+      // that used to compile mid-street (cascade depth, interiors, skinned
+      // shadows, settled light count). Boot is longer than minimal; console
+      // Program Info Log spam moves into load instead of gameplay.
+      return {
+        tier: 'low',
+        poses: 2, // street + interior
+        render: { post: true, shadow: false },
+        world: { forward: true, overrides: ['depth', 'prepass'] },
+        ai: true, // skinned CSM-depth (init may have run; hook is idempotent)
+        settle: true,
+        stageCombat: true,
       };
     case 'medium':
-      // Middle ground: one representative pose, world CSM-depth only (skip the
-      // second full-level prepass compile), AI hook still skipped (init covers it).
       return {
         tier: 'medium',
-        poses: 1,
+        poses: 2,
         render: { post: true, shadow: false },
-        world: { forward: true, overrides: ['depth'] },
-        ai: false,
+        world: { forward: true, overrides: ['depth', 'prepass'] },
+        ai: true,
+        settle: true,
+        stageCombat: true,
       };
     case 'high':
       return {
@@ -116,6 +128,8 @@ export function resolvePrewarmPolicy(quality, mode = 'auto') {
         render: { post: true, shadow: false },
         world: { forward: true, overrides: ['depth', 'prepass'] },
         ai: true,
+        settle: true,
+        stageCombat: true,
       };
     default:
       return {
@@ -124,6 +138,8 @@ export function resolvePrewarmPolicy(quality, mode = 'auto') {
         render: { post: true, shadow: RENDER_SHADOW_WARM },
         world: { forward: true, overrides: ['depth', 'prepass'] },
         ai: true,
+        settle: true,
+        stageCombat: true,
       };
   }
 }
@@ -211,22 +227,35 @@ export async function prewarm(
   try {
     let step = 0;
     const hookBudget = 6;
+    const settleBudget = policy.settle ? 2 : 0;
+    const combatBudget = policy.stageCombat ? 2 : 0;
     const totalSteps =
-      Math.max(1, poses.length * 2) + hookBudget + (transients ? transientStages.length : 0) + 1;
+      Math.max(1, poses.length * 2) +
+      hookBudget +
+      settleBudget +
+      combatBudget +
+      (transients ? transientStages.length : 0) +
+      1;
     const tick = () => onProgress(Math.min(1, ++step / totalSteps));
 
-    // Pass 1: multi-pose forward compile. Skipped entirely on low (poses=0) —
-    // the render hook still does one compile at the real spawn pose.
+    // Pass 1: multi-pose forward compile (street + interior on hitch-reduced low).
     if (poses.length === 0) {
+      // Still warm the real spawn pose once so post/HDR keys exist.
+      await compile();
       tick();
     } else {
       for (const p of poses) {
         cam.position.set(...p.pos);
         cam.lookAt(...p.look);
         cam.updateMatrixWorld(true);
+        try {
+          engine.ctx.peek('world')?._stabiliseLightCount?.(engine.ctx);
+        } catch {
+          /* optional */
+        }
         await compile();
         tick();
-        if (drawFrames) {
+        if (drawFrames || policy.drawFrames) {
           engine.step();
           await yieldFrame();
           engine.step();
@@ -256,7 +285,8 @@ export async function prewarm(
       if (id === 'world' && !policy.world) continue;
       if (id === 'ai' && !policy.ai) continue;
       // Unknown subsystems with the hook still run on high/ultra only.
-      if (id !== 'world' && id !== 'ai' && policy.tier === 'low') continue;
+      if (id !== 'world' && id !== 'ai' && (policy.tier === 'low' || policy.tier === 'minimal'))
+        continue;
       hooks.push({ sys, kind: id });
     }
 
@@ -273,7 +303,9 @@ export async function prewarm(
         } else if (id === 'world' && policy.world && typeof policy.world === 'object') {
           arg = { ...policy.world, ctx: engine.ctx };
         } else if (id === 'ai') {
-          arg = { depth: policy.tier !== 'low' };
+          // Always request skinned CSM-depth when the AI hook runs — that is the
+          // first-enemy-in-shadows hitch on low.
+          arg = { depth: true };
         } else {
           arg = engine.ctx;
         }
@@ -286,6 +318,61 @@ export async function prewarm(
     }
     for (let i = hooks.length; i < hookBudget; i++) tick();
     engine.__prewarmHooks = hookResults;
+
+    // Pass 1c: re-compile at the *settled* punctual-light count. Without this,
+    // ballast + distance cull only lock in after the first real frames, and the
+    // real numPointLights key still compiles mid-play (Program Info Log spam).
+    if (policy.settle) {
+      cam.position.copy(saved.pos);
+      cam.quaternion.copy(saved.quat);
+      cam.updateMatrixWorld(true);
+      try {
+        engine.ctx.peek('world')?._stabiliseLightCount?.(engine.ctx);
+        const rSys = engine.ctx.peek('render');
+        const camPos = rSys?._camPos;
+        if (camPos && rSys?._cullLights) {
+          camPos.setFromMatrixPosition(cam.matrixWorld);
+          rSys._cullLights(camPos);
+        }
+      } catch {
+        /* optional */
+      }
+      await compile();
+      tick();
+      await compile();
+      tick();
+    } else {
+      for (let i = 0; i < settleBudget; i++) tick();
+    }
+
+    // Pass 1d: stage combat meshes so skinned + weapon viewmodel programs
+    // exist under the live light set, then tear down. Simulation clock is
+    // restored in finally — this is compile-only residue control.
+    if (policy.stageCombat) {
+      try {
+        engine.ctx.peek('ai')?.debugStage?.('firefight');
+        engine.ctx.peek('weapons')?.debugPose?.('fire');
+      } catch {
+        /* optional */
+      }
+      try {
+        engine.ctx.peek('world')?._stabiliseLightCount?.(engine.ctx);
+      } catch {
+        /* optional */
+      }
+      await compile();
+      tick();
+      await compile();
+      tick();
+      try {
+        engine.ctx.peek('ai')?.debugStage?.('none');
+        engine.ctx.peek('weapons')?.debugPose?.('idle');
+      } catch {
+        /* optional */
+      }
+    } else {
+      for (let i = 0; i < combatBudget; i++) tick();
+    }
 
     // Pass 2: transients (off by default — not pixel-transparent).
     for (const spawn of transients ? transientStages : []) {
@@ -303,14 +390,19 @@ export async function prewarm(
     }
     tick();
   } finally {
-    for (const reset of transients
-      ? [
-          () => engine.ctx.peek('fx')?.debugBurst?.('none'),
-          () => engine.ctx.peek('weapons')?.debugPose?.('idle'),
-          () => engine.ctx.peek('ui')?.debugState?.('clean'),
-          () => engine.ctx.peek('ai')?.debugStage?.('none'),
-        ]
-      : []) {
+    for (const reset of [
+      ...(transients
+        ? [
+            () => engine.ctx.peek('fx')?.debugBurst?.('none'),
+            () => engine.ctx.peek('weapons')?.debugPose?.('idle'),
+            () => engine.ctx.peek('ui')?.debugState?.('clean'),
+            () => engine.ctx.peek('ai')?.debugStage?.('none'),
+          ]
+        : []),
+      // Always clear combat stage residue from hitch-reduction warm.
+      () => engine.ctx.peek('ai')?.debugStage?.('none'),
+      () => engine.ctx.peek('weapons')?.debugPose?.('idle'),
+    ]) {
       try {
         reset();
       } catch {

@@ -265,7 +265,11 @@ if (!skipMenu) {
   load.enterReady({
     meta: `${quality.toUpperCase()} · ${gpu.renderer || 'GPU'}`,
   });
+  // Prewarm stages a firefight for shader compile; make sure none of those
+  // props are still parked on the spawn when the player hits Deploy.
+  engine.ctx.peek('ai')?.clearStage?.();
   await load.waitForDeploy();
+  engine.ctx.peek('ai')?.clearStage?.();
   engine.time.scale = 1;
   engine.input.enabled = true;
   player?.setControlEnabled?.(true);
