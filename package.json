@@ -6,8 +6,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4173",
-    "shot": "node tools/capture.mjs"
+    "shot": "bun tools/capture.mjs"
   },
+  "packageManager": "bun@1.3.4",
   "author": "",
   "license": "ISC",
   "type": "module",

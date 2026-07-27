@@ -7,8 +7,8 @@ Fork of [Claude of Duty](https://github.com/mshumer/Claude-of-Duty) (mshumer) â€
 ## Run
 
 ```bash
-npm install
-npm run dev          # http://127.0.0.1:5173
+bun install
+bun run dev          # http://127.0.0.1:5173
 ```
 
 Click the canvas to lock the cursor. WASD move, mouse aim, LMB fire, RMB ADS,
