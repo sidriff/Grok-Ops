@@ -934,3 +934,119 @@ export const IMPACTS = {
 export function spawnImpact(fx, point, normal, incident, surface, energy) {
   (IMPACTS[surface] ?? IMPACTS.concrete)(fx, point, normal, incident, energy);
 }
+
+/**
+ * Prop destruction burst — the whole object is gone, so this is denser and
+ * more omnidirectional than a single bullet impact on the same surface.
+ *
+ * @param {{x:number,y:number,z:number}} p
+ * @param {string} surface  wood | glass | metal | …
+ * @param {number} scale    roughly the prop's radius in metres
+ */
+export function spawnBreak(fx, p, surface, scale = 0.4) {
+  const rng = fx.rng;
+  const q = fx.pScale;
+  const s = Math.max(0.2, scale);
+  const px = p.x;
+  const py = p.y;
+  const pz = p.z;
+  let sp;
+
+  if (surface === 'glass') {
+    const nShard = Math.round(22 * q) + 10;
+    for (let i = 0; i < nShard; i++) {
+      cone(V2, rng, 0, 1, 0, 1.4, 1.4);
+      const spd = rng.range(2, 9);
+      sp = resetSpawn();
+      sp.x = px; sp.y = py; sp.z = pz;
+      sp.vx = V2.x * spd; sp.vy = V2.y * spd + rng.range(0.5, 2.5); sp.vz = V2.z * spd;
+      sp.tile = rng.float() < 0.45 ? P.SPLINTER : P.CHIP;
+      sp.size0 = rng.range(0.012, 0.04) * s; sp.size1 = sp.size0;
+      sp.life = rng.range(0.55, 1.3);
+      sp.drag = 0.7; sp.gravity = -18;
+      sp.rot = rng.float() * TWO_PI; sp.spin = rng.signed() * 28;
+      sp.r0 = 0.72; sp.g0 = 0.8; sp.b0 = 0.84;
+      sp.r1 = 0.55; sp.g1 = 0.62; sp.b1 = 0.68;
+      sp.alpha = 0.9; sp.alphaCurve = 0.35; sp.soft = 0.06; sp.seed = rng.float();
+      fx.emitLit(sp);
+      if (rng.float() < 0.4) {
+        sp.tile = P.SPARK;
+        sp.size0 = rng.range(0.01, 0.018); sp.size1 = sp.size0;
+        sp.r0 = 0.9; sp.g0 = 0.97; sp.b0 = 1; sp.i0 = rng.range(4, 9);
+        sp.r1 = 0.8; sp.g1 = 0.9; sp.b1 = 1; sp.i1 = 0;
+        sp.flags = 1; sp.alpha = 1;
+        fx.emitAdd(sp);
+      }
+    }
+    const nMist = Math.round(5 * q) + 2;
+    for (let i = 0; i < nMist; i++) {
+      cone(V2, rng, 0, 1, 0, 1.2, 0.8);
+      sp = resetSpawn();
+      sp.x = px; sp.y = py; sp.z = pz;
+      sp.vx = V2.x * 1.2; sp.vy = V2.y * 1.2 + 0.4; sp.vz = V2.z * 1.2;
+      sp.tile = P.MIST;
+      sp.size0 = 0.06 * s; sp.size1 = rng.range(0.35, 0.6) * s; sp.sizeCurve = 0.5;
+      sp.life = rng.range(0.4, 0.85); sp.drag = 3.8; sp.gravity = -2;
+      sp.rot = rng.float() * TWO_PI;
+      sp.r0 = 0.8; sp.g0 = 0.86; sp.b0 = 0.9;
+      sp.r1 = 0.7; sp.g1 = 0.76; sp.b1 = 0.8;
+      sp.alpha = 0.55; sp.alphaCurve = 1.5; sp.soft = 0.12; sp.seed = rng.float();
+      fx.emitLit(sp);
+    }
+    return;
+  }
+
+  // Wood / cardboard default, with a metal-chip tint for steel cans.
+  const isMetal = surface === 'metal';
+  const nChip = Math.round((isMetal ? 14 : 18) * q) + 8;
+  for (let i = 0; i < nChip; i++) {
+    cone(V2, rng, 0, 1, 0, 1.35, 1.35);
+    const spd = rng.range(2.2, 8.5);
+    sp = resetSpawn();
+    sp.x = px + rng.signed() * s * 0.15;
+    sp.y = py + rng.range(0, s * 0.4);
+    sp.z = pz + rng.signed() * s * 0.15;
+    sp.vx = V2.x * spd; sp.vy = V2.y * spd + rng.range(0.8, 3); sp.vz = V2.z * spd;
+    sp.tile = isMetal ? (i % 3 === 0 ? P.SPARK : P.CHIP) : i % 3 === 0 ? P.SPLINTER : P.CHIP;
+    sp.size0 = rng.range(0.012, 0.05) * s; sp.size1 = sp.size0 * (isMetal ? 0.5 : 1);
+    sp.life = rng.range(0.5, 1.25);
+    sp.drag = isMetal ? 1.2 : 0.75; sp.gravity = -17;
+    sp.rot = rng.float() * TWO_PI; sp.spin = rng.signed() * 24;
+    if (isMetal) {
+      blackbody(C, rng.range(1800, 2600));
+      sp.r0 = C.r; sp.g0 = C.g; sp.b0 = C.b; sp.i0 = rng.range(2, 7);
+      sp.r1 = 0.25; sp.g1 = 0.22; sp.b1 = 0.2; sp.i1 = 0;
+      sp.flags = 1;
+      fx.emitAdd(sp);
+    } else {
+      sp.r0 = 0.46; sp.g0 = 0.32; sp.b0 = 0.17;
+      sp.r1 = 0.34; sp.g1 = 0.24; sp.b1 = 0.13;
+      sp.alphaCurve = 0.3; sp.soft = 0.06; sp.seed = rng.float();
+      fx.emitLit(sp);
+    }
+  }
+  const nDust = Math.round(8 * q) + 3;
+  for (let i = 0; i < nDust; i++) {
+    cone(V2, rng, 0, 1, 0, 1.1, 0.7);
+    const spd = rng.range(0.5, 2.2);
+    sp = resetSpawn();
+    sp.x = px; sp.y = py + s * 0.15; sp.z = pz;
+    sp.vx = V2.x * spd; sp.vy = V2.y * spd + 0.5; sp.vz = V2.z * spd;
+    sp.tile = P.DUST;
+    sp.size0 = rng.range(0.06, 0.14) * s;
+    sp.size1 = rng.range(0.35, 0.7) * s;
+    sp.sizeCurve = 0.5;
+    sp.life = rng.range(0.55, 1.15); sp.drag = 3.2; sp.gravity = -0.7;
+    sp.rot = rng.float() * TWO_PI; sp.spin = rng.signed() * 1.2;
+    if (isMetal) {
+      sp.r0 = 0.28; sp.g0 = 0.26; sp.b0 = 0.24;
+      sp.r1 = 0.22; sp.g1 = 0.2; sp.b1 = 0.18;
+    } else {
+      sp.r0 = 0.48; sp.g0 = 0.36; sp.b0 = 0.22;
+      sp.r1 = 0.38; sp.g1 = 0.28; sp.b1 = 0.17;
+    }
+    sp.alpha = rng.range(0.45, 0.75); sp.alphaCurve = 1.4;
+    sp.soft = 0.1; sp.turb = 0.06; sp.turbFreq = 2; sp.seed = rng.float();
+    fx.emitLit(sp);
+  }
+}

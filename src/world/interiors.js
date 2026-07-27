@@ -548,7 +548,7 @@ function furnishStorage(A, rng, r, cx, cz, w, d, m) {
       A.put(rng.pick(['barrel_rust', 'barrel_blue', 'barrel_wood']), sx, y, sz, rng.float() * 6.28, 1, [
         1, 1.2, 1,
       ]);
-      A.box('metal', sx, y + 0.45, sz, 0.62, 0.9, 0.62);
+      // collision: per-instance via destructibles.js (so a boom removes cover)
     } else if (pick < 0.85) {
       A.put('tyre', sx, y, sz, rng.float() * 6.28, 1, [1, 1.3, 1]);
       if (rng.float() < 0.6) {
@@ -644,7 +644,8 @@ export function stackCrates(A, rng, x, y, z, n) {
       s,
       [1, rng.range(0.7, 1.4), 1]
     );
-    A.box('wood', x, cy + (hh * s) / 2, z, 0.7, hh * s, 0.7);
+    // Per-crate collision lives on the destructibles layer so a broken crate
+    // actually opens the stack instead of leaving a ghost box.
     cy += hh * s;
     if (rng.float() < 0.2) break;
   }

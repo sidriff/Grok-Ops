@@ -831,7 +831,6 @@ function marketStalls(A, rng) {
     const sideZ = z - Math.sin(ry) * (w / 2 + 0.5);
     if (isOpen(sideX, sideZ, 0.4)) {
       A.put('barrel_wood', sideX, groundY(sideX, sideZ), sideZ, rng.float() * 6.28, 1, [1, 1.2, 1]);
-      A.box('wood', sideX, y + 0.4, sideZ, 0.66, 0.8, 0.66);
     }
     A.put('stool', x - Math.sin(ry) * 0.95, y, z - Math.cos(ry) * 0.95, rng.float() * 6.28, 1, [
       1,
@@ -1377,12 +1376,15 @@ function coverClusters(A, rng) {
     const bx = x + Math.cos(ry + 1.57) * 1.5;
     const bz = z - Math.sin(ry + 1.57) * 1.5;
     if (isOpen(bx, bz, 0.4)) {
-      A.put(rng.pick(['crate_c', 'barrel_rust', 'block_small']), bx, groundY(bx, bz), bz, rng.float() * 6.28, 1, [
+      const coverId = rng.pick(['crate_c', 'barrel_rust', 'block_small']);
+      A.put(coverId, bx, groundY(bx, bz), bz, rng.float() * 6.28, 1, [
         1,
         1.2,
         1,
       ]);
-      A.box('wood', bx, y + 0.4, bz, 0.8, 0.8, 0.8);
+      // Crates/barrels get removeable colliders from destructibles; concrete
+      // blocks stay as permanent cover.
+      if (coverId === 'block_small') A.box('concrete', bx, y + 0.22, bz, 0.55, 0.44, 0.42);
       groundSkirt(A, rng, bx, groundY(bx, bz), bz, 0.5, { pebbles: rng.int(3, 6) });
     }
     for (let i = 0; i < rng.int(3, 6); i++) {
@@ -1806,9 +1808,11 @@ export function scatterDebris(A, rng) {
         rng.range(1.0, 1.5),
         1,
       ]);
-      // big items get a collision box; scatter does not
-      if (id.startsWith('barrel')) A.box('metal', x, y + 0.45, z, 0.62, 0.9, 0.62);
-      else if (id.startsWith('crate')) A.box('wood', x, y + 0.3, z, 0.62, 0.6, 0.62);
+      // Destructible barrels/crates register their own removeable collision
+      // boxes after bake (see world/destructibles.js). Non-destructibles
+      // (pallets, tyres, blocks) that still need cover get a proxy below.
+      if (id === 'pallet') A.box('wood', x, y + 0.08, z, 1.1, 0.16, 0.9);
+      else if (id.startsWith('tyre')) A.box('rubber', x, y + 0.15, z, 0.55, 0.3, 0.55);
     }
     // a skip-load of rubble at one end of each alley
     if (rng.float() < 0.7) {

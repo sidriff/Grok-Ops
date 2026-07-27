@@ -912,20 +912,81 @@ export function registerProps(A, rngIn) {
    * on a table — deliberately do not get one.
    */
   const LOOSE = (tilt, sink) => ({ tilt, sink });
+  /**
+   * Destruction recipes. `break` = poof into particles; `explode` = fireball
+   * via the existing explosion pipeline (and can chain). `hx/hy/hz` is the
+   * half-extent of the per-instance collision box; `oy` is the box centre
+   * above the prop's feet. HP is against bullet damage (~25-35 per rifle hit).
+   */
+  const BREAK = (surface, hp, hx, hy, hz, oy) => ({
+    destructible: { kind: 'break', surface, hp, hx, hy, hz, oy: oy ?? hy },
+  });
+  const BOOM = (surface, hp, hx, hy, hz, oy, radius, damage) => ({
+    destructible: {
+      kind: 'explode',
+      surface,
+      hp,
+      hx,
+      hy,
+      hz,
+      oy: oy ?? hy,
+      radius: radius ?? 5,
+      damage: damage ?? 140,
+    },
+  });
 
   // containers
-  P('crate_a', 'wood_prop', crate(rng, 0.64), { skirt: 0.37, ...LOOSE(0.09, 0.022) });
-  P('crate_b', 'wood_prop', crate(rng, 0.48), LOOSE(0.10, 0.018));
-  P('crate_c', 'wood_prop_dark', crate(rng, 0.82), { skirt: 0.45, ...LOOSE(0.075, 0.026) });
-  P('crate_flat', 'wood_prop', crate(rng, 0.55, false), LOOSE(0.10, 0.02));
-  P('box_card_a', 'wood_pale', cardboardBox(rng, 0.46), LOOSE(0.10, 0.016));
-  P('box_card_b', 'wood_pale', cardboardBox(rng, 0.34), LOOSE(0.11, 0.012));
-  P('barrel_rust', 'metal_rust_prop', barrel(rng), { skirt: 0.28, ...LOOSE(0.085, 0.014) });
-  P('barrel_blue', 'metal_blue', barrel(rng, 0.28, 0.9, 2), { skirt: 0.26, ...LOOSE(0.085, 0.014) });
-  P('barrel_wood', 'wood_prop_dark', barrel(rng, 0.31, 0.78, 4), { skirt: 0.28, ...LOOSE(0.09, 0.015) });
-  P('gas_bottle', 'metal_green', gasBottle(rng), { skirt: 0.18, ...LOOSE(0.07, 0.008) });
+  P('crate_a', 'wood_prop', crate(rng, 0.64), {
+    skirt: 0.37,
+    ...LOOSE(0.09, 0.022),
+    ...BREAK('wood', 55, 0.34, 0.28, 0.32, 0.28),
+  });
+  P('crate_b', 'wood_prop', crate(rng, 0.48), {
+    ...LOOSE(0.10, 0.018),
+    ...BREAK('wood', 40, 0.26, 0.22, 0.24, 0.22),
+  });
+  P('crate_c', 'wood_prop_dark', crate(rng, 0.82), {
+    skirt: 0.45,
+    ...LOOSE(0.075, 0.026),
+    ...BREAK('wood', 75, 0.42, 0.36, 0.40, 0.36),
+  });
+  P('crate_flat', 'wood_prop', crate(rng, 0.55, false), {
+    ...LOOSE(0.10, 0.02),
+    ...BREAK('wood', 45, 0.30, 0.24, 0.28, 0.24),
+  });
+  P('box_card_a', 'wood_pale', cardboardBox(rng, 0.46), {
+    ...LOOSE(0.10, 0.016),
+    ...BREAK('wood', 18, 0.24, 0.20, 0.22, 0.20),
+  });
+  P('box_card_b', 'wood_pale', cardboardBox(rng, 0.34), {
+    ...LOOSE(0.11, 0.012),
+    ...BREAK('wood', 12, 0.18, 0.15, 0.16, 0.15),
+  });
+  P('barrel_rust', 'metal_rust_prop', barrel(rng), {
+    skirt: 0.28,
+    ...LOOSE(0.085, 0.014),
+    ...BOOM('metal', 90, 0.32, 0.45, 0.32, 0.45, 5.5, 150),
+  });
+  P('barrel_blue', 'metal_blue', barrel(rng, 0.28, 0.9, 2), {
+    skirt: 0.26,
+    ...LOOSE(0.085, 0.014),
+    ...BOOM('metal', 90, 0.31, 0.46, 0.31, 0.46, 5.5, 150),
+  });
+  P('barrel_wood', 'wood_prop_dark', barrel(rng, 0.31, 0.78, 4), {
+    skirt: 0.28,
+    ...LOOSE(0.09, 0.015),
+    ...BREAK('wood', 60, 0.33, 0.40, 0.33, 0.40),
+  });
+  P('gas_bottle', 'metal_green', gasBottle(rng), {
+    skirt: 0.18,
+    ...LOOSE(0.07, 0.008),
+    ...BOOM('metal', 35, 0.12, 0.42, 0.12, 0.42, 4.5, 160),
+  });
   P('bucket', 'metal_rust_prop', bucket(rng), LOOSE(0.12, 0.008));
-  P('jerry_can', 'metal_green', jerryCan(rng), LOOSE(0.10, 0.01));
+  P('jerry_can', 'metal_green', jerryCan(rng), {
+    ...LOOSE(0.10, 0.01),
+    ...BOOM('metal', 45, 0.18, 0.22, 0.12, 0.22, 4.2, 130),
+  });
 
   // cover
   P('sandbag_a', 'burlap', sandbag(rng, 0), LOOSE(0.085, 0.006));
@@ -962,8 +1023,16 @@ export function registerProps(A, rngIn) {
   P('rock_b', 'concrete_dark', rockGeometry(rng, 0.17, 0, 0.8), { maxDist: 70, castShadow: false });
   P('slab_shard', 'concrete_prop', slabShard(rng), LOOSE(0.14, 0.01));
   P('rebar', 'metal_rust', rebarBundle(rng), LOOSE(0.10, 0.004));
-  P('plank_a', 'wood_prop', plank(rng), { maxDist: 90, ...LOOSE(0.06, 0.004) });
-  P('plank_b', 'wood_prop_dark', plank(rng), { maxDist: 90, ...LOOSE(0.06, 0.004) });
+  P('plank_a', 'wood_prop', plank(rng), {
+    maxDist: 90,
+    ...LOOSE(0.06, 0.004),
+    ...BREAK('wood', 15, 0.45, 0.03, 0.08, 0.03),
+  });
+  P('plank_b', 'wood_prop_dark', plank(rng), {
+    maxDist: 90,
+    ...LOOSE(0.06, 0.004),
+    ...BREAK('wood', 15, 0.45, 0.03, 0.08, 0.03),
+  });
   P('litter', 'wood_pale', litterPaper(rng), { maxDist: 45, castShadow: false });
   /**
    * Contact fillets. Registered last so `put()` can find it, and never given a
@@ -971,8 +1040,16 @@ export function registerProps(A, rngIn) {
    * the contact line is a pixel wide anyway.
    */
   P('dust_skirt', 'dust_skirt', dustSkirt(rng), { maxDist: 42, castShadow: false });
-  P('bottle', 'glass', bottle(rng), { maxDist: 55, castShadow: false });
-  P('can', 'steel', can(rng), { maxDist: 45, castShadow: false });
+  P('bottle', 'glass', bottle(rng), {
+    maxDist: 55,
+    castShadow: false,
+    ...BREAK('glass', 1, 0.05, 0.12, 0.05, 0.12),
+  });
+  P('can', 'steel', can(rng), {
+    maxDist: 45,
+    castShadow: false,
+    ...BREAK('metal', 1, 0.04, 0.06, 0.04, 0.06),
+  });
 
   // vegetation
   const palm = palmTree(rng, 5.4);

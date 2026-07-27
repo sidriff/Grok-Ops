@@ -173,7 +173,7 @@ export class Assembler {
   // ------------------------------------------------------------ instanced --
   /**
    * @param {string} id
-   * @param {object} spec { geo, key, castShadow, chunk, maxDist, collide }
+   * @param {object} spec { geo, key, castShadow, chunk, maxDist, collide, destructible }
    */
   proto(id, spec) {
     if (this._protos.has(id)) return id;
@@ -203,6 +203,12 @@ export class Assembler {
       receiveShadow: spec.receiveShadow !== false,
       chunk: spec.chunk !== false,
       maxDist: spec.maxDist ?? 0,
+      /**
+       * Optional destruction recipe (see props.js). When set, the finalized
+       * InstancedMesh carries the recipe so WorldSystem can register each
+       * instance as a shootable prop.
+       */
+      destructible: spec.destructible ?? null,
       matrices: [],
       masks: [],
       noPrepass: !!spec.noPrepass,
@@ -365,6 +371,8 @@ export class Assembler {
         im.matrixAutoUpdate = false;
         im.userData.surface = this.surfaceOf(p.key);
         im.userData.collision = false;
+        im.userData.protoId = p.id;
+        if (p.destructible) im.userData.destructible = p.destructible;
         if (p.noPrepass) im.userData.owNoPrepass = true;
         let needColor = false;
         for (let j = 0; j < list.length; j++) if (p.masks[list[j]]) needColor = true;

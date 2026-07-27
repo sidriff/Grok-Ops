@@ -14,6 +14,7 @@ import {
   groundY,
   isOpen,
 } from './dressing.js';
+import { Destructibles } from './destructibles.js';
 
 /**
  * WORLD — level geometry, the modular building kit, props, set dressing and
@@ -32,8 +33,9 @@ import {
  *                 stairs, awnings, parapets, drainpipes, damage)
  *   buildings.js  assembles a building from a footprint + a facade programme
  *   interiors.js  furnishes rooms so an interior screenshot is worth taking
- *   props.js      the instanced prop library
+ *   props.js      the instanced prop library (incl. destruction recipes)
  *   dressing.js   places the hundreds of props, cables, laundry and debris
+ *   destructibles.js  shootable flimsy/explosive props (poof + boom)
  *   ground.js     terrain, road camber, kerbs, pavement slabs, sand drifts
  *   builder.js    the Assembler: merges statics, batches instances, authors
  *                 collision proxies, bakes the level->world transform
@@ -141,6 +143,16 @@ export class WorldSystem {
 
     A.finalize(this.root, physics);
     A.releaseCache();
+
+    // Shootable / breakable set dressing. Registers after collision proxies so
+    // each destructible gets its own removeable box in the BVH.
+    this.destructibles = new Destructibles({
+      world: this,
+      physics,
+      events: ctx.events,
+      getFx: () => ctx.peek('fx'),
+    });
+    this.destructibles.build(A.meshes);
 
     // -------------------------------------------------------------- queries --
     this._v = new THREE.Vector3();
@@ -466,6 +478,8 @@ export class WorldSystem {
   }
 
   dispose() {
+    this.destructibles?.dispose();
+    this.destructibles = null;
     this.A?.dispose();
     this.root?.parent?.remove(this.root);
     for (const l of this._ballast ?? []) l.parent?.remove(l);
