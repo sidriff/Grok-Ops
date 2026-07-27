@@ -180,16 +180,24 @@ export class UiSystem {
     const on = (type, fn) => this._unsubs.push(ctx.events.on(type, fn));
 
     on('weapon:fire', (e) => {
-      this.crosshair.onFire(e?.recoil ?? 1);
+      // Only the *local* weapon kicks the reticle / spends HUD ammo.
+      // AI also emits weapon:fire for muzzle FX — that used to punch the
+      // crosshair on every hostile burst, which felt like "my gun is firing
+      // without me" and masked a dry mag as a broken trigger.
+      const local = e?.local === true || e?.firstPerson === true;
+      if (local) this.crosshair.onFire(e?.recoil ?? 1);
       // Any muzzle — yours or theirs — pings the minimap at the origin.
       const o = e?.origin;
       if (o && Number.isFinite(o.x) && Number.isFinite(o.z)) this._pushPing(o.x, o.z);
-      if (this.state.simulate) return;
+      if (this.state.simulate || !local) return;
       const w = this._weaponState();
       if (!w) this.state.ammo = Math.max(0, this.state.ammo - 1);
     });
 
     on('weapon:reload', (e) => {
+      // Enemies emit reload start for VO/foley — never own the player HUD.
+      if (e?.actor && e.actor !== this.ctx.peek('player') && e.local !== true) return;
+      if (e?.local === false) return;
       const s = this.state;
       if (e?.phase === 'start') {
         s.reloading = true;

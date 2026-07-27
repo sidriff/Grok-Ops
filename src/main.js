@@ -265,11 +265,14 @@ if (!skipMenu) {
   load.enterReady({
     meta: `${quality.toUpperCase()} · ${gpu.renderer || 'GPU'}`,
   });
-  // Prewarm stages a firefight for shader compile; make sure none of those
-  // props are still parked on the spawn when the player hits Deploy.
+  // Prewarm stages a firefight + freezes the viewmodel for shader compile.
+  // Both must be fully cleared before Deploy or the player spawns into an
+  // ambush they cannot shoot (debugMode === 'idle' blocks live fire).
   engine.ctx.peek('ai')?.clearStage?.();
+  engine.ctx.peek('weapons')?.clearDebugPose?.();
   await load.waitForDeploy();
   engine.ctx.peek('ai')?.clearStage?.();
+  engine.ctx.peek('weapons')?.clearDebugPose?.();
   engine.time.scale = 1;
   engine.input.enabled = true;
   player?.setControlEnabled?.(true);

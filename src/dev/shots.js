@@ -135,7 +135,12 @@ export function installShotApi(engine, { capture, lockstep = false } = {}) {
     // previous shot's *looping* debug state first. Without this the `muzzle`
     // shot's scripted burst is still emptying the magazine during `combat`, and
     // `impacts` keeps walking rounds across a wall behind the HUD shot.
-    engine.ctx.peek('weapons')?.debugPose?.('idle');
+    // Exit pose lock — 'idle' used to leave debugMode set and mute live fire.
+    {
+      const wp = engine.ctx.peek('weapons');
+      if (wp?.clearDebugPose) wp.clearDebugPose();
+      else wp?.debugPose?.('none');
+    }
     engine.ctx.peek('fx')?.debugBurst?.('none');
     engine.ctx.peek('ui')?.debugState?.('clean');
 

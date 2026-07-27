@@ -7,7 +7,7 @@ import { HazeSystem } from './haze.js';
 import { LightPool } from './lights.js';
 import { ShellSystem } from './shells.js';
 import { Ambience } from './ambience.js';
-import { spawnImpact } from './impacts.js';
+import { spawnImpact, spawnBreak } from './impacts.js';
 import { muzzleFlash } from './muzzle.js';
 import { spawnTracer } from './tracers.js';
 import { explode } from './explosions.js';
@@ -395,7 +395,12 @@ export class FxSystem {
     if (!e || e.fx === false || !e.origin || !e.dir) return;
     this.now = this.ctx.time.elapsed;
     this._camPos.setFromMatrixPosition(this.ctx.camera.matrixWorld);
-    const firstPerson = this._camPos.distanceToSquared(e.origin) < 2.25;
+    // Viewmodel flash only for the local gun. Distance-only used to paint AI
+    // muzzles into the viewmodel scene when a hostile was within ~1.5 m.
+    let firstPerson;
+    if (e.local === true || e.firstPerson === true) firstPerson = true;
+    else if (e.local === false || e.firstPerson === false) firstPerson = false;
+    else firstPerson = this._camPos.distanceToSquared(e.origin) < 2.25;
     this.muzzleFlash({
       position: e.origin,
       direction: e.dir,
@@ -498,6 +503,17 @@ export class FxSystem {
   explosion(e) {
     this.now = this.ctx.time.elapsed;
     explode(this, e);
+  }
+
+  /**
+   * Whole-prop destruction burst (crate splinters, bottle shatter, can spray).
+   * Called from the world destructibles layer when a flimsy prop dies.
+   */
+  propBreak(e) {
+    if (!e) return;
+    this.now = this.ctx.time.elapsed;
+    const p = e.position ?? e;
+    spawnBreak(this, p, e.surface ?? 'wood', e.scale ?? 0.4);
   }
 
   /** Eject a brass casing as a physics body. */

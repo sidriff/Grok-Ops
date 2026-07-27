@@ -366,7 +366,9 @@ export async function prewarm(
       tick();
       try {
         engine.ctx.peek('ai')?.debugStage?.('none');
-        engine.ctx.peek('weapons')?.debugPose?.('idle');
+        const wp = engine.ctx.peek('weapons');
+        if (wp?.clearDebugPose) wp.clearDebugPose();
+        else wp?.debugPose?.('none');
       } catch {
         /* optional */
       }
@@ -390,18 +392,25 @@ export async function prewarm(
     }
     tick();
   } finally {
+    const clearWeaponsDebug = () => {
+      const wp = engine.ctx.peek('weapons');
+      // MUST clear, not debugPose('idle') — that left debugMode set and
+      // permanently disabled player fire after boot.
+      if (wp?.clearDebugPose) wp.clearDebugPose();
+      else wp?.debugPose?.('none');
+    };
     for (const reset of [
       ...(transients
         ? [
             () => engine.ctx.peek('fx')?.debugBurst?.('none'),
-            () => engine.ctx.peek('weapons')?.debugPose?.('idle'),
+            clearWeaponsDebug,
             () => engine.ctx.peek('ui')?.debugState?.('clean'),
             () => engine.ctx.peek('ai')?.debugStage?.('none'),
           ]
         : []),
       // Always clear combat stage residue from hitch-reduction warm.
       () => engine.ctx.peek('ai')?.debugStage?.('none'),
-      () => engine.ctx.peek('weapons')?.debugPose?.('idle'),
+      clearWeaponsDebug,
     ]) {
       try {
         reset();

@@ -44,6 +44,8 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  *   wp.reload()           no-op if full or empty of reserve
  *   wp.inspect()
  *   wp.tryFire()          honours fire mode + rpm; returns true if a shot left
+ *   wp.tryThrow()         G — real frag grenade
+ *   wp.grenadeCount
  *   wp.viewmodel          the rig (fx/ui may read muzzle/eject transforms)
  *   wp.muzzleWorld(v3)    world-space muzzle, for anything that needs it
  *   wp.debugPose(kind)    'idle' | 'ads' | 'fire'  (the capture harness)
@@ -54,10 +56,17 @@ import { clamp, clamp01, lerp, damp, DEG } from './mathx.js';
  *   weapon:shell   { position, velocity }
  *   weapon:reload  { weapon, phase: 'start'|'magout'|'magin'|'end' }
  *   bullet:tracer  { from, to, speed }
+ *   explosion      { position, radius, damage, source }  — on nade detonation
  * `bullet:impact` comes from physics, because physics owns penetration.
  * Anything else (ammo counts, fire mode, the current weapon) is a getter on
  * this object rather than an event, so no new event types are introduced.
  */
+
+/** Starting frag count — matches the ammo panel default. */
+const GRENADE_LOADOUT = 2;
+
+/** Frag ballistics + blast. Fuse is seconds after the throw. */
+const NADE = { fuse: 2.35, radius: 6.5, damage: 120, speed: 14.5, lob: 3.4, mass: 0.42 };
 export class WeaponSystem {
   static id = 'weapons';
   static deps = ['materials', 'physics'];
@@ -86,8 +95,16 @@ export class WeaponSystem {
     this._up = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
     this._camDir = new THREE.Vector3();
-    this._firePayload = { weapon: null, origin: new THREE.Vector3(), dir: new THREE.Vector3(), seed: 0 };
-    this._reloadPayload = { weapon: null, phase: 'start' };
+    this._firePayload = {
+      weapon: null,
+      origin: new THREE.Vector3(),
+      dir: new THREE.Vector3(),
+      seed: 0,
+      local: true,
+      firstPerson: true,
+      recoil: 1,
+    };
+    this._reloadPayload = { weapon: null, phase: 'start', local: true };
     // `weapon:shell` carries the canonical { position, velocity } plus the real
     // case dimensions and a spin, so fx can size and tumble the brass instead of
     // guessing: a 9x19 case is less than half the length of a 5.56x45 one.
@@ -122,7 +139,17 @@ export class WeaponSystem {
     this._hudState = {
       name: '', mode: 'auto', ammo: 0, reserve: 0, magSize: 0,
       reloading: false, reloadProgress: 0, ads: false, spread: 0, firing: false,
+      lethalCount: GRENADE_LOADOUT,
     };
+
+    // Equipment — real inventory, not HUD wallpaper.
+    this.grenadeCount = GRENADE_LOADOUT;
+    this._throwCd = 0;
+    this._grenades = [];
+    this._grenadeGeo = null;
+    this._grenadeMat = null;
+    this._throwFrom = new THREE.Vector3();
+    this._throwVel = new THREE.Vector3();
   }
 
   /* ====================================================================== */
@@ -176,6 +203,13 @@ export class WeaponSystem {
       ctx.events.on('player:land', (e) => this.viewmodel.land(Math.abs(e?.velocity ?? 3)))
     );
     this._off.push(ctx.events.on('player:jump', () => this.viewmodel.jump()));
+    // Fresh frags each life — no infinite pocket of despair.
+    this._off.push(
+      ctx.events.on('player:respawn', () => {
+        this.grenadeCount = GRENADE_LOADOUT;
+        this._throwCd = 0;
+      })
+    );
 
     this.stats = { tris, drawCalls: 0, live: 0, fired: 0 };
     console.info(
@@ -279,6 +313,7 @@ export class WeaponSystem {
     // normalised 0..1 rather than raw degrees.
     h.spread = Math.min(1, Math.max(0, this._spread / 6));
     h.firing = this.firing;
+    h.lethalCount = this.grenadeCount | 0;
     return h;
   }
 
@@ -323,6 +358,131 @@ export class WeaponSystem {
     if (this.reloading || this.switching || this.inspecting) return false;
     this.viewmodel.play('inspect');
     return true;
+  }
+
+  /* ====================================================================== */
+  /*  grenades                                                              */
+  /* ====================================================================== */
+
+  /**
+   * Lob a frag. Returns true if one left the hand.
+   */
+  tryThrow() {
+    if (this._throwCd > 0 || this.grenadeCount <= 0) return false;
+    const player = this.player ?? this.ctx?.peek?.('player');
+    if (player?.dead || player?.deathActive || player?.controlEnabled === false) return false;
+
+    this.grenadeCount--;
+    const def = NADE;
+
+    const phys = this.physics ?? this.ctx?.peek?.('physics');
+    if (!phys?.addRigidBody) {
+      // Physics missing: still spend the nade so the count stays honest, but
+      // detonate immediately at the aim point so it never becomes a free softlock.
+      this._bangNow(def, player);
+      this._throwCd = 0.7;
+      return true;
+    }
+
+    this._ensureGrenadeMesh();
+    const cam = this.ctx.camera;
+    cam.getWorldDirection(this._dir);
+    this._right.set(1, 0, 0).applyQuaternion(cam.quaternion);
+    this._up.set(0, 1, 0).applyQuaternion(cam.quaternion);
+
+    // Leave the right hand, slightly forward of the camera so it doesn't
+    // clip the viewmodel and the lob reads as a throw, not a muzzle spawn.
+    this._throwFrom
+      .copy(cam.position)
+      .addScaledVector(this._dir, 0.42)
+      .addScaledVector(this._right, 0.18)
+      .addScaledVector(this._up, -0.14);
+
+    // Aim-coupled lob: look up and it sails; look flat and it still arcs.
+    const lookY = this._dir.y;
+    const speed = def.speed * (0.88 + 0.18 * clamp01(1 - Math.abs(lookY)));
+    this._throwVel
+      .copy(this._dir)
+      .multiplyScalar(speed)
+      .addScaledVector(this._up, def.lob * (0.55 + 0.45 * clamp01(0.35 - lookY)));
+    // Guarantee a usable vertical component even when aiming at the dirt.
+    if (this._throwVel.y < 1.6) this._throwVel.y = 1.6 + def.lob * 0.35;
+
+    const mesh = new THREE.Mesh(this._grenadeGeo, this._grenadeMat);
+    mesh.castShadow = true;
+    this.ctx.scene.add(mesh);
+
+    const body = phys.addRigidBody({
+      shape: 'sphere',
+      radius: 0.05,
+      mass: def.mass,
+      position: this._throwFrom,
+      velocity: this._throwVel,
+      restitution: 0.28,
+      friction: 0.72,
+      lifetime: 10,
+      object3D: mesh,
+      surfaceType: 'metal',
+    });
+
+    this._grenades.push({
+      body,
+      mesh,
+      fuse: def.fuse,
+      radius: def.radius,
+      damage: def.damage,
+    });
+    this._throwCd = 0.75;
+
+    // Soft camera punch so the throw isn't a silent HUD decrement.
+    player?.addKick?.(0.018, 0.01, 0.008);
+    this.viewmodel?.addRecoil?.(0.035, 0.02, false);
+
+    return true;
+  }
+
+  _ensureGrenadeMesh() {
+    if (this._grenadeGeo) return;
+    this._grenadeGeo = new THREE.IcosahedronGeometry(0.05, 1);
+    this._grenadeMat = new THREE.MeshStandardMaterial({
+      color: 0x2c3226,
+      roughness: 0.62,
+      metalness: 0.85,
+    });
+  }
+
+  _updateGrenades(dt) {
+    if (!this._grenades.length) return;
+    const phys = this.physics;
+    const player = this.player ?? this.ctx?.peek?.('player');
+    for (let i = this._grenades.length - 1; i >= 0; i--) {
+      const g = this._grenades[i];
+      g.fuse -= dt;
+      if (g.fuse > 0) continue;
+      const p = g.body?.position ?? g.mesh.position;
+      this.ctx.events.emit('explosion', {
+        position: new THREE.Vector3(p.x, p.y, p.z),
+        radius: g.radius,
+        damage: g.damage,
+        source: player ?? 'player',
+      });
+      phys?.removeRigidBody?.(g.body);
+      g.mesh?.removeFromParent?.();
+      this._grenades.splice(i, 1);
+    }
+  }
+
+  /** Physics-less fallback: bang along the look ray so the nade still "works". */
+  _bangNow(def, player) {
+    const cam = this.ctx.camera;
+    cam.getWorldDirection(this._dir);
+    this._throwFrom.copy(cam.position).addScaledVector(this._dir, 8);
+    this.ctx.events.emit('explosion', {
+      position: this._throwFrom.clone(),
+      radius: def.radius,
+      damage: def.damage,
+      source: player ?? 'player',
+    });
   }
 
   /* ====================================================================== */
@@ -590,6 +750,8 @@ export class WeaponSystem {
     this._sinceShot += dt;
     if (this._fireTimer > 0) this._fireTimer -= dt;
     if (this._burstCooldown > 0) this._burstCooldown -= dt;
+    if (this._throwCd > 0) this._throwCd -= dt;
+    this._updateGrenades(dt);
 
     // ---- spread recovery -------------------------------------------------
     const rest = this._restSpread(def, player, st);
@@ -618,6 +780,7 @@ export class WeaponSystem {
     // ---- input -----------------------------------------------------------
     if (live) {
       if (input.actionPressed('reload')) this.reload();
+      if (input.actionPressed('grenade')) this.tryThrow();
       if (input.pressed('KeyB')) this.cycleFireMode();
       if (input.pressed('KeyI')) this.inspect();
       if (input.pressed('Digit1')) this.setWeapon('rifle');
@@ -627,8 +790,10 @@ export class WeaponSystem {
       if (input.wheel) this.nextWeapon();
       this._runTrigger(dt, input.fire, input.firePressed, def, s);
       st.trigger = input.fire && this.canFire();
-      // Auto-reload on a dry trigger pull, like every modern shooter.
-      if (input.firePressed && st.empty) this.reload();
+      // Auto-reload on dry fire. Held auto used to only key off firePressed, so
+      // an empty mag + held LMB felt like a dead gun while hostiles still
+      // "kicked" the reticle via the shared weapon:fire bus.
+      if (st.empty && !this.reloading && (input.firePressed || input.fire)) this.reload();
     } else if (this.debugMode) {
       this._runDebug(ctx);
       st.trigger = this._sinceShot < 0.09;
@@ -690,6 +855,9 @@ export class WeaponSystem {
       vm.boreDir(this._firePayload.dir);
       this._firePayload.weapon = def;
       this._firePayload.seed = this._fireSeed >>> 0;
+      this._firePayload.local = true;
+      this._firePayload.firstPerson = true;
+      this._firePayload.recoil = this._pendingFirst ? 1.15 : 0.85;
       for (let i = 0; i < this._pendingShots; i++) {
         ctx.events.emit('weapon:fire', this._firePayload);
       }
@@ -739,9 +907,18 @@ export class WeaponSystem {
    * Freeze the viewmodel in a photogenic state.
    * The harness applies a shot, then pumps `SETTLE` frames before grabbing the
    * frame, so 'fire' schedules a short burst that peaks right at the capture.
+   *
+   * Pass `'none'` / `null` / `'clear'` to **exit** debug mode and return control
+   * to the player. Prewarm used to call `debugPose('idle')` in its finally
+   * block, which left `debugMode === 'idle'` forever — and live fire only runs
+   * when `debugMode === null`. That is "I can't shoot after boot."
    */
   debugPose(kind = 'idle', opts = {}) {
     const vm = this.viewmodel;
+    if (!kind || kind === 'none' || kind === 'clear' || kind === 'off') {
+      this.clearDebugPose();
+      return null;
+    }
     this.debugMode = kind;
     this.setWeaponImmediate('rifle');
     vm.stopClip();
@@ -813,6 +990,27 @@ export class WeaponSystem {
     return kind;
   }
 
+  /** Exit capture/prewarm pose lock so the player can fire again. */
+  clearDebugPose() {
+    this.debugMode = null;
+    this._scriptFrames = null;
+    this._debugFrame = 0;
+    this._switchTo = null;
+    this._fireTimer = 0;
+    if (this.viewmodel) {
+      this.viewmodel.debugFrozen = false;
+      this.viewmodel.stopClip?.();
+      this.viewmodel.boltHold = 0;
+    }
+    const s = this.state;
+    if (s) {
+      // Prewarm may have left a partial mag from the 'fire' pose.
+      if (s.mag < s.def.magSize) s.mag = s.def.magSize;
+      s.chambered = true;
+    }
+    return null;
+  }
+
   /** Swap without the draw animation (harness + debug only). */
   setWeaponImmediate(id) {
     if (!this.states.has(id)) return false;
@@ -846,6 +1044,13 @@ export class WeaponSystem {
       if (p.body && this.physics?.removeRigidBody) this.physics.removeRigidBody(p.body);
     }
     this._droppedMags.length = 0;
+    for (const g of this._grenades) {
+      this.physics?.removeRigidBody?.(g.body);
+      g.mesh?.removeFromParent?.();
+    }
+    this._grenades.length = 0;
+    this._grenadeGeo?.dispose();
+    this._grenadeMat?.dispose();
     this.viewmodel?.dispose();
     this.mats?.dispose();
   }

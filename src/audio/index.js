@@ -575,7 +575,14 @@ export class AudioSystem {
     const lp = this.field.listenerPos;
     const x = o?.x ?? lp.x, y = o?.y ?? lp.y, z = o?.z ?? lp.z;
     const dist = this.field.distanceTo(x, y, z);
-    const firstPerson = p.firstPerson ?? dist < 2.6;
+    // Explicit flags win. Distance fallback is only for legacy callers that
+    // forget — never promote a tagged AI shot (local:false) to first-person.
+    const firstPerson =
+      p.local === true || p.firstPerson === true
+        ? true
+        : p.local === false || p.firstPerson === false
+          ? false
+          : dist < 2.6;
 
     if (firstPerson) {
       // Own weapon: no propagation delay, mostly dry, and the send level is

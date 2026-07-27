@@ -455,7 +455,8 @@ export class Agent {
         this.crouch = false;
         this.aimWeight = Math.max(0, this.aimWeight - dt * 0.8);
         if (this.hasTarget) this._enterCombat();
-        else if (this.patrolPoints && this.stateTime > 2.5) this._setState(STATE.PATROL);
+        // Start patrol quickly — long idle at spawn is the "statue garrison".
+        else if (this.patrolPoints && this.stateTime > 0.6) this._setState(STATE.PATROL);
         break;
 
       case STATE.PATROL: {
@@ -549,6 +550,34 @@ export class Agent {
     this._setState(STATE.COMBAT);
     this.cover = null;
     this.repathTimer = 0;
+    this._holdTimer = 0;
+  }
+
+  /**
+   * Close distance toward `target` when cover is missing/unreachable.
+   * Stops short of a brawl (~12 m) so they take a fighting stand instead of
+   * running into the player's muzzle.
+   */
+  _advanceOn(target, force = false) {
+    const dist = this.position.distanceTo(target);
+    if (dist < 11) return false;
+    if (!force && this._searchRepath > 0 && this.hasMoveTarget) return false;
+    // Point between us and the contact — not the contact itself (suicide charge).
+    const t = Math.min(0.72, Math.max(0.28, 1 - 12 / dist));
+    this._v.set(
+      this.position.x + (target.x - this.position.x) * t,
+      target.y,
+      this.position.z + (target.z - this.position.z) * t
+    );
+    // Slight lateral jitter so a whole squad does not stack on one line.
+    const side = this.id % 2 ? 1 : -1;
+    const dx = target.x - this.position.x;
+    const dz = target.z - this.position.z;
+    const len = Math.hypot(dx, dz) || 1;
+    this._v.x += (-dz / len) * side * this.rng.range(1.2, 3.5);
+    this._v.z += (dx / len) * side * this.rng.range(1.2, 3.5);
+    this._searchRepath = this.rng.range(1.0, 1.8);
+    return this._goTo(this._v);
   }
 
   _combat(dt) {
@@ -559,6 +588,7 @@ export class Agent {
     }
     const sq = this.squad;
     const dist = this.position.distanceTo(target);
+    this._holdTimer = (this._holdTimer ?? 0) + dt;
 
     // wounded and outgunned: fall back
     if (this.health < 34 && this.stateTime > 1.5 && this.rng.float() < dt * 0.5) {
@@ -575,54 +605,73 @@ export class Agent {
       }
     }
 
-    // no cover yet, or the current one no longer protects: find one
+    // Pick / refresh cover. Prefer nearby fighting cover; if none, advance.
     if (!this.cover || this.repathTimer <= 0) {
       const pick = this.ai.cover?.pick(this.position, target, {
         id: this.id,
         squad: sq?.members,
         minRange: 7,
         maxRange: 30,
-        maxTravel: this.cover ? 12 : 26,
+        maxTravel: this.cover ? 14 : 32,
       });
-      this.repathTimer = this.rng.range(2.2, 4.5);
+      this.repathTimer = this.rng.range(2.0, 3.8);
       if (pick && pick !== this.cover) {
         this.cover = pick;
         this.coverPos.set(pick.x, pick.y, pick.z);
+        this._holdTimer = 0;
         this._goTo(this.coverPos);
+      } else if (!pick && !this.cover) {
+        // No cover in range: push up instead of turreting from spawn.
+        this._advanceOn(target, true);
       }
     }
 
-    // A cover point we cannot actually reach must not mute the agent for ever.
-    // `_goTo` fails outright when A* finds no route (which happens for a cover
-    // point across an unwalkable seam), and a path can also run out short of the
-    // point. The branch below reads "has cover, not standing in it" as "walk,
-    // weapon down, hold fire", so without this the agent stands in the open with
-    // the player in plain sight and never pulls the trigger.
+    // Unreachable cover must not freeze the agent. Drop it and advance.
     if (
       this.cover &&
       !this.hasMoveTarget &&
-      !this.pathPending && // still queued behind the frame's A* budget
+      !this.pathPending &&
       this.position.distanceTo(this.coverPos) > 0.85
     ) {
       this.cover = null;
       this.ai.cover?.release(this.id);
-      this.repathTimer = Math.min(this.repathTimer, 0.6);
+      this.repathTimer = Math.min(this.repathTimer, 0.45);
+      this._advanceOn(target, true);
+    }
+
+    // Held the same hole too long while the player is still active: re-pick.
+    if (this.cover && this._holdTimer > 7.5 && this.hasTarget) {
+      this.ai.cover?.release(this.id);
+      this.cover = null;
+      this.repathTimer = 0;
+      this._holdTimer = 0;
     }
 
     const atCover = this.cover
       ? this.position.distanceTo(this.coverPos) < 0.85
       : false;
+    const movingToCover = !!(this.cover && !atCover);
 
-    if (this.cover && !atCover) {
-      // moving into position: run, weapon down, no shooting
+    if (movingToCover) {
+      // Run into the hole. Allow light suppress while closing so they still
+      // "do something" if the path is short or blocked for a beat.
       this.desiredSpeed = 4.3;
       this.crouch = false;
-      this.wantFire = false;
-      this.aimWeight = 0.35;
-    } else {
+      this.aimWeight = 0.45;
+      this.wantFire =
+        this.targetVisible && this.hasTarget && dist < this.weaponRange && this.rng.float() < 0.2;
+      // Path still pending / failed: don't stand in place with a ghost cover.
+      if (!this.hasMoveTarget && !this.pathPending) {
+        this._advanceOn(target, false);
+      }
+    } else if (this.cover && atCover) {
+      // Peek-and-shoot hold.
       this.desiredSpeed = 0;
-      this.hasMoveTarget = false;
-      // peek-and-shoot, gated by the squad so they alternate
+      // Do not clear hasMoveTarget every frame if a reposition path is live —
+      // only clear when we are truly planted on the cover node.
+      if (!this.pathPending && this.position.distanceTo(this.coverPos) < 0.5) {
+        this.hasMoveTarget = false;
+      }
       const allowed = !sq || sq.requestPeek(this, dt);
       if (this.peekTimer <= 0) {
         this.peeking = allowed && this.targetVisible !== false;
@@ -632,16 +681,28 @@ export class Agent {
           this.coverPos.copy(this._v2);
         }
       }
-      this.crouch = this.cover ? !this.cover.high || !this.peeking : false;
+      this.crouch = !this.cover.high || !this.peeking;
       this.aimWeight = this.peeking ? 1 : 0.55;
       this.wantFire = this.peeking && this.targetVisible && this.hasTarget && dist < this.weaponRange;
-      // suppressing fire at the last known spot even without a clean shot
       if (!this.wantFire && this.hasTarget && this.lastKnownAge < 2.2 && this.peeking) {
         this.wantFire = this.rng.float() < 0.35;
       }
+    } else {
+      // Open ground: advance while shooting. Never plant as a turret.
+      this.crouch = false;
+      this.aimWeight = 0.75;
+      if (!this.hasMoveTarget && !this.pathPending) this._advanceOn(target, false);
+      const closing = this.hasMoveTarget || this.pathPending;
+      this.desiredSpeed = closing ? (dist > 22 ? 3.8 : 2.6) : 0;
+      this.peeking = true;
+      this.wantFire =
+        this.targetVisible && this.hasTarget && dist < this.weaponRange;
+      if (!this.wantFire && this.hasTarget && this.lastKnownAge < 2.5) {
+        this.wantFire = this.rng.float() < 0.4;
+      }
     }
 
-    // flank when the player has been static and we have friends shooting
+    // flank when friends are already shooting
     if (
       sq &&
       this.stateTime > 4 &&
@@ -757,15 +818,18 @@ export class Agent {
     this.speed += (targetSpeed - this.speed) * Math.min(1, dt * 7);
     if (this.speed < 0.05) this.speed = 0;
 
-    // facing: hunt/alert/combat all orient on last-known; otherwise go where we walk
-    const hunting =
-      this.state === STATE.COMBAT ||
-      this.state === STATE.SUPPRESSED ||
-      this.state === STATE.ALERT ||
-      this.hasTarget;
-    if (hunting && this.lastKnownAge < 10) {
+    // Face the threat when holding / firing; when sprinting into cover or
+    // advancing, look where we run so we do not strafe-moonwalk into walls.
+    const holding =
+      (this.state === STATE.COMBAT || this.state === STATE.SUPPRESSED) &&
+      this.desiredSpeed < 1.2 &&
+      this.lastKnownAge < 10;
+    const huntingAlert =
+      this.state === STATE.ALERT && this.lastKnownAge < 10 && this.desiredSpeed < 0.5;
+    if ((holding || huntingAlert || (this.hasTarget && this.wantFire && this.speed < 1.0))
+      && this.lastKnownAge < 10) {
       this.targetYaw = Math.atan2(this.lastKnown.x - this.position.x, this.lastKnown.z - this.position.z);
-    } else if (this.speed > 0.2) {
+    } else if (this._steer.lengthSq() > 1e-6 && (this.speed > 0.15 || this.hasMoveTarget)) {
       this.targetYaw = Math.atan2(this._steer.x, this._steer.z);
     }
     let dy = this.targetYaw - this.yaw;

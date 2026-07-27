@@ -22,7 +22,9 @@
  *                                                    the local player's death cam)
  *   ai.removeCorpse(agent)                 dispose a player corpse early
  *   ai.agents                              live Agent list
- *   ai.debugStage('firefight')             staged combat tableau for captures
+ *   ai.debugStage('firefight'|'none')      staged combat tableau for captures;
+ *                                          'none' MUST tear it down (prewarm)
+ *   ai.clearStage()                        remove every staged agent
  *   ai.prewarmMaterials()                  await: build + compile every character
  *                                          shader without spawning anything
  *   ai.grid / ai.cover                     navigation + cover queries
@@ -99,6 +101,10 @@ export class AiSystem {
       origin: new THREE.Vector3(),
       dir: new THREE.Vector3(),
       seed: 0,
+      // Never treat AI muzzles as the player's first-person gun (UI reticle,
+      // dry weapon audio, viewmodel flash all key off these flags).
+      local: false,
+      firstPerson: false,
       // Sprites and light are gained SEPARATELY: see _flashGain/_flashLight.
       // The sprites have to read as fire at 25 m; the punctual light must not
       // turn the shooter into the brightest object in the frame.
@@ -119,7 +125,8 @@ export class AiSystem {
     /** A* solves allowed per frame. Measured: one solve is 0.5-1.1 ms on the
      *  221x221 grid, and a squad that all enters combat on the same frame used to
      *  ask for six of them at once. */
-    this.pathsPerFrame = 2;
+    // Six agents can all repath on contact; 2/frame left half the squad planted.
+    this.pathsPerFrame = 4;
     this.stats.pathsDeferred = 0;
     this._frustum = new THREE.Frustum();
     this._mvp = new THREE.Matrix4();
@@ -364,12 +371,8 @@ export class AiSystem {
         if (this.phys && !this.phys.lineOfSight(e.position, a.eye, this.phys.MASK.EXPLOSION)) continue;
         const f = 1 - d / radius;
         this._v.copy(a.position).sub(e.position).normalize();
-        // Flashes mostly stun; frags still delete people. Kind comes from the
-        // thrower when present (player nades); AI frags leave it unset.
-        const suppressMul = e.kind === 'tactical' ? 2.4 : 1.4;
-        const dmgMul = e.kind === 'tactical' ? 0.15 : 1;
-        a.suppress(suppressMul * f);
-        const amount = (e.damage ?? 100) * f * f * dmgMul;
+        a.suppress(1.4 * f);
+        const amount = (e.damage ?? 100) * f * f;
         const wasAlive = a.alive;
         a.applyDamage(amount, 'torso', a.eye, this._v);
         if (wasAlive && playerSource) {
@@ -689,6 +692,9 @@ export class AiSystem {
     fe.light = this._flashLight();
     fe.flashScale = 0.8;
     fe.seed = (agent.id * 2654435761 + ctx.time.frame) >>> 0;
+    fe.local = false;
+    fe.firstPerson = false;
+    fe.source = agent;
     ctx.events.emit('weapon:fire', fe);
 
     // ejected case
@@ -751,7 +757,12 @@ export class AiSystem {
   }
 
   emitReload(agent) {
-    this.ctx.events.emit('weapon:reload', { weapon: 'ai_rifle', phase: 'start', actor: agent });
+    this.ctx.events.emit('weapon:reload', {
+      weapon: 'ai_rifle',
+      phase: 'start',
+      actor: agent,
+      local: false,
+    });
   }
 
   /**
@@ -866,6 +877,17 @@ export class AiSystem {
     // Per-frame A* budget: see requestPath().
     this._pathBudget = this.pathsPerFrame;
     this._updateRelevance(ctx);
+
+    // Title shell freezes the clock (scale=0). Still skip brains so a stray
+    // non-zero dt or path retry can't walk the garrison into the player mid-load.
+    const frozen = (ctx.time?.scale ?? 1) <= 0 || dt <= 0;
+    if (frozen) {
+      let alive = 0;
+      for (const a of this.agents) if (a.alive) alive++;
+      this.stats.agents = this.agents.length;
+      this.stats.alive = alive;
+      return;
+    }
 
     for (const s of this.squads) s.update(dt);
 
@@ -1108,12 +1130,53 @@ export class AiSystem {
   }
 
   /**
+   * Tear down every agent spawned by `debugStage('firefight')` / inspect.
+   * Prewarm used to call `debugStage('none')` and that was a no-op — staged
+   * hostiles (including a mid-stride runner) stayed on top of the player spawn
+   * through Deploy. Never again.
+   */
+  clearStage() {
+    const tagged = this._stagedAgents ?? [];
+    const kill = new Set(tagged);
+    // Also sweep by flag — inspect path and any stragglers not tracked.
+    for (const a of this.agents) {
+      if (a.staged || a.isStageProp) kill.add(a);
+    }
+    for (const a of kill) {
+      this.cover?.release?.(a.id);
+      if (a.squad) {
+        const m = a.squad.members;
+        const i = m.indexOf(a);
+        if (i >= 0) m.splice(i, 1);
+        a.squad = null;
+      }
+      const i = this.agents.indexOf(a);
+      if (i >= 0) this.agents.splice(i, 1);
+      try {
+        a.dispose?.();
+      } catch {
+        /* ragdoll/controller may already be gone */
+      }
+    }
+    this._stagedAgents = [];
+    // Drop empty squads left by the tableau (keep garrison squads).
+    this.squads = this.squads.filter((s) => s.members.length > 0);
+    return this.stats;
+  }
+
+  /**
    * `debugStage('firefight')` — a staged firefight in front of the shot camera:
    * one man up and firing from behind hard cover, one crouched and peeking, one
    * moving between positions, one reloading further back.
+   * `debugStage('none')` / falsy — remove every staged agent (required after prewarm).
    */
   debugStage(name) {
+    if (!name || name === 'none' || name === 'clear' || name === 'off') {
+      return this.clearStage();
+    }
     if (name !== 'firefight') return this.stats;
+    // Re-staging must not stack ghosts on top of the previous tableau.
+    this.clearStage();
     if (this.inspect) return this._stageInspect();
     if (this._navPending) this._buildNav();
 
@@ -1127,6 +1190,7 @@ export class AiSystem {
     F.normalize();
     const right = new THREE.Vector3(F.z, 0, -F.x);
     const squad = this.createSquad();
+    this._stagedAgents = [];
 
     /** [variant, ndcX, depth, crouch, speed, fire, reloadEvery] */
     const LAYOUT = [
@@ -1158,6 +1222,7 @@ export class AiSystem {
         reloadEvery: reload || 0,
         suppression: crouch ? 0.15 : 0,
       };
+      a.isStageProp = true;
       // stagger the burst timers so the frame catches muzzle flashes
       a.burstCooldown = this.rng.range(0, 0.3);
       a.burstLeft = this.rng.int(2, 6);
@@ -1165,7 +1230,6 @@ export class AiSystem {
       a.aimTarget.copy(this.playerPosition(this._v3));
       a.animator.update(0.016, 0);
       placedPositions.push(pos.clone());
-      this._stagedAgents = (this._stagedAgents ?? []);
       this._stagedAgents.push(a);
       if (this.debugLog) {
         console.info(
@@ -1180,10 +1244,13 @@ export class AiSystem {
     const dPos = this._stageSlot(cam, -0.58, 9.4, placedPositions);
     const casualty = this.spawn('breacher', dPos, Math.atan2(cam.position.x - dPos.x, cam.position.z - dPos.z));
     squad.add(casualty);
+    casualty.isStageProp = true;
+    casualty.staged = { noDamage: true, fire: false, speed: 0 };
     casualty.animator.update(0.016, 0);
     const hit = new THREE.Vector3(dPos.x, dPos.y + 1.35, dPos.z);
     const inc = new THREE.Vector3().subVectors(hit, cam.position).normalize();
     casualty.applyDamage(260, 'torso', hit, inc);
+    this._stagedAgents.push(casualty);
 
     return this.stats;
   }
@@ -1201,6 +1268,7 @@ export class AiSystem {
       ['irregular', 2.7, -0.95, 3.0],
       ['breacher', 3.6, 1.15, -0.7],
     ];
+    this._stagedAgents = this._stagedAgents ?? [];
     for (const [nm, d, s2, extraYaw] of layout) {
       const p = new THREE.Vector3().copy(cam.position).addScaledVector(F, d).addScaledVector(right, s2);
       p.y = this.groundAt(p.x, p.z, cam.position.y + 1.0);
@@ -1213,6 +1281,8 @@ export class AiSystem {
         aimWeight: 1,
         heading: new THREE.Vector3(0, 0, 1),
       };
+      a.isStageProp = true;
+      this._stagedAgents.push(a);
     }
     return this.stats;
   }
