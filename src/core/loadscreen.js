@@ -1,17 +1,20 @@
 /**
- * Boot / title shell controller.
+ * Boot / title shell controller — also the in-game pause menu.
  *
- * Markup + CSS live in index.html for first paint. Phases:
- *   1. briefing  — what this is, pick graphics, press Load
- *   2. loading   — progress + controls + sens/FOV/invert (graphics locked)
- *   3. ready     — Deploy to enter the match
+ * Markup + CSS live in index.html for first paint. One layout from the start:
+ *   graphics · progress · controls · settings · single CTA
  *
- * Graphics quality is chosen before engine init (it drives shaders, bake sizes,
- * prewarm). Changing it after Load only shows "Reload to change". Look prefs
- * (sens / FOV / invert) apply live once `bindConfig` is called.
+ * CTA modes: Load → Loading… → Deploy → (in-game) Resume
+ * Graphics lock after Load. Look prefs apply live once `bindConfig` is called.
  *
- * Capture / tooling paths call hideImmediate() so the overlay never appears.
+ * Menu audio (procedural clicks + sparse loop) starts on title load so a cold
+ * boot proves the app has sound — no sample assets.
+ *
+ * Capture / tooling paths call hideImmediate() so the overlay starts hidden;
+ * pause can still re-open it as the settings shell.
  */
+
+import { MenuAudio } from '../audio/menu.js';
 
 const STAGE_LABELS = {
   boot: 'Booting…',
@@ -83,70 +86,77 @@ function writePrefs(prefs) {
 export class LoadScreen {
   constructor(root = document.getElementById('boot')) {
     this.root = root;
-    this.briefingEl = root?.querySelector('#boot-briefing') ?? null;
-    this.loadingEl = root?.querySelector('#boot-loading') ?? null;
+    this.blurbEl = root?.querySelector('#boot-blurb') ?? null;
     this.qualityHost = root?.querySelector('#boot-quality') ?? null;
-    this.qualityLockedHost = root?.querySelector('#boot-quality-locked') ?? null;
-    this.qWarnBrief = root?.querySelector('#boot-q-warn') ?? null;
-    this.qWarnLoad = root?.querySelector('#boot-q-warn-load') ?? null;
+    this.qLabel = root?.querySelector('#boot-q-label') ?? null;
+    this.qWarn = root?.querySelector('#boot-q-warn') ?? null;
     this.qLive = root?.querySelector('#boot-q-live') ?? null;
-    this.briefHint = root?.querySelector('#boot-brief-hint') ?? null;
-    this.loadBtn = root?.querySelector('#boot-load') ?? null;
     this.labelEl = root?.querySelector('#boot-label') ?? null;
     this.pctEl = root?.querySelector('#boot-pct') ?? null;
     this.fillEl = root?.querySelector('#boot-fill') ?? null;
     this.metaEl = root?.querySelector('#boot-meta') ?? null;
     this.hintEl = root?.querySelector('#boot-hint') ?? null;
     this.deployBtn = root?.querySelector('#boot-deploy') ?? null;
+    this.deployLabel = root?.querySelector('.boot-deploy-label') ?? null;
     this.sensInput = root?.querySelector('#boot-sens') ?? null;
     this.sensVal = root?.querySelector('#boot-sens-val') ?? null;
     this.fovInput = root?.querySelector('#boot-fov') ?? null;
     this.fovVal = root?.querySelector('#boot-fov-val') ?? null;
+    this.volInput = root?.querySelector('#boot-vol') ?? null;
+    this.volVal = root?.querySelector('#boot-vol-val') ?? null;
     this.invertHost = root?.querySelector('#boot-invert') ?? null;
+    this.kickerEl = root?.querySelector('.boot-kicker') ?? null;
 
-    this._phase = 'briefing'; // briefing | loading | ready | gone
+    // idle | loading | ready | playing | paused
+    this._phase = 'idle';
     this._progress = 0;
     this._ready = false;
+    this._inGame = false;
     this._dismissed = false;
     this._qualityLocked = false;
     this._selectedQuality = 'medium';
     this._recommended = 'medium';
     this._loadResolvers = [];
     this._deployResolvers = [];
+    this._resumeHandler = null;
     this._config = null;
     this._camera = null;
     this._qCards = [];
-    this._qCardsLocked = [];
+    this._hideTimer = 0;
+    this._menuAudio = new MenuAudio();
+    this._lastTickAt = 0;
+    this._musicArmed = false;
 
     const saved = readPrefs() || {};
     this.prefs = {
       sensMult: clampNum(saved.sensMult, 0.2, 3, 1),
       fov: clampNum(saved.fov, 65, 120, 80),
       invertY: !!saved.invertY,
+      masterVol: clampNum(saved.masterVol, 0, 1, 0.95),
       quality: PRESETS.includes(saved.quality) ? saved.quality : null,
     };
+    this._menuAudio.setVolume(this.prefs.masterVol);
 
-    this._onDeployClick = () => this._resolveDeploy();
-    this._onLoadClick = () => this._resolveLoad();
+    this._onCtaClick = () => this._resolveCta();
     this._onKey = (e) => {
       if (this._dismissed) return;
-      if (this._phase === 'briefing' && (e.code === 'Enter' || e.code === 'Space')) {
+      if (e.code !== 'Enter' && e.code !== 'Space') return;
+      if (this._phase === 'idle' || this._phase === 'ready' || this._phase === 'paused') {
         e.preventDefault();
-        this._resolveLoad();
-        return;
-      }
-      if (this._phase === 'ready' && this._ready && (e.code === 'Enter' || e.code === 'Space')) {
-        e.preventDefault();
-        this._resolveDeploy();
+        this._resolveCta();
       }
     };
 
-    if (this.deployBtn) this.deployBtn.addEventListener('click', this._onDeployClick);
-    if (this.loadBtn) this.loadBtn.addEventListener('click', this._onLoadClick);
+    if (this.deployBtn) this.deployBtn.addEventListener('click', this._onCtaClick);
     addEventListener('keydown', this._onKey);
 
     this._bindLookControls();
-    this._setPhase('briefing');
+    this._setActionButton('load');
+
+    // Start the briefing bed ASAP so a cold load proves the app has sound.
+    if (this.root && !this.root.classList.contains('boot-hidden')) {
+      queueMicrotask(() => this._startMenuAudioOnBoot());
+    }
   }
 
   get ready() {
@@ -155,6 +165,14 @@ export class LoadScreen {
 
   get dismissed() {
     return this._dismissed;
+  }
+
+  get inGame() {
+    return this._inGame;
+  }
+
+  get paused() {
+    return this._phase === 'paused';
   }
 
   get selectedQuality() {
@@ -171,7 +189,15 @@ export class LoadScreen {
   }
 
   /**
-   * Show briefing, wait for Load. Returns chosen quality + look prefs.
+   * PauseMenu wires this so Resume / Enter / Space unpause the match.
+   * @param {null | (() => void)} fn
+   */
+  setResumeHandler(fn) {
+    this._resumeHandler = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * Show shell, wait for Load. Returns chosen quality + look prefs.
    * @param {{ recommended?: string, forced?: string|null, gpuLabel?: string }} opts
    */
   waitForBriefing({ recommended = 'medium', forced = null, gpuLabel = '' } = {}) {
@@ -182,23 +208,39 @@ export class LoadScreen {
       });
     }
 
+    this._phase = 'idle';
+    this._ready = false;
+    this._qualityLocked = false;
     this._recommended = PRESETS.includes(recommended) ? recommended : 'medium';
     this._selectedQuality =
       (forced && PRESETS.includes(forced) && forced) ||
       this.prefs.quality ||
       this._recommended;
 
-    this._buildQualityCards(this.qualityHost, this._qCards, { locked: false });
+    this._buildQualityCards({ locked: false });
     this._syncQualityUi();
     this._syncLookUi();
+    this._setLiveQuality();
+    this._setWarn('');
+    this._setActionButton('load');
 
-    if (this.briefHint) {
+    if (this.labelEl) this.labelEl.textContent = 'Stand by';
+    if (this.pctEl) this.pctEl.textContent = '—';
+    if (this.fillEl) this.fillEl.style.width = '0%';
+    if (this.qLabel) this.qLabel.textContent = 'Graphics';
+    if (this.kickerEl) this.kickerEl.textContent = 'Operator Briefing';
+    if (this.hintEl) {
       const rec = this._recommended.toUpperCase();
-      this.briefHint.textContent = gpuLabel
+      this.hintEl.textContent = gpuLabel
         ? `GPU suggests ${rec} · ${gpuLabel}`
         : `GPU suggests ${rec}`;
     }
-    if (this.loadBtn) this.loadBtn.focus?.({ preventScroll: true });
+    if (this.metaEl) this.metaEl.textContent = '';
+    if (this.blurbEl) this.blurbEl.hidden = false;
+
+    this.root.classList.remove('boot-ready', 'boot-hidden', 'boot-gone');
+    this.deployBtn?.focus?.({ preventScroll: true });
+    this._startMenuAudioOnBoot();
 
     return new Promise((resolve) => {
       this._loadResolvers.push(() => {
@@ -212,27 +254,30 @@ export class LoadScreen {
     });
   }
 
-  /** Enter the loading phase (progress bar + controls). Locks graphics. */
+  /**
+   * Lock graphics and flip CTA to Loading…. Same layout — no transition.
+   * @param {{ meta?: string }} [opts]
+   */
   beginLoading({ meta } = {}) {
     if (this._dismissed || !this.root) return;
+    this._phase = 'loading';
+    this._ready = false;
     this._qualityLocked = true;
-    this._setPhase('loading');
-    this._buildQualityCards(this.qualityLockedHost, this._qCardsLocked, { locked: true });
-    this._syncQualityUi();
-    this._syncLookUi();
     this._progress = 0;
+    this._syncQualityUi();
+    this._setLiveQuality();
+    this._setWarn('');
+    this._setActionButton('loading');
+
     if (this.fillEl) this.fillEl.style.width = '0%';
     if (this.pctEl) this.pctEl.textContent = '0%';
     if (this.labelEl) this.labelEl.textContent = 'Loading…';
     if (this.hintEl) this.hintEl.textContent = 'Building the AO';
+    if (this.qLabel) this.qLabel.textContent = 'Graphics (locked)';
+    if (this.kickerEl) this.kickerEl.textContent = 'Operator Briefing';
     if (meta != null) this.setMeta(meta);
-    if (this.qLive) {
-      const b = QUALITY_BLURBS[this._selectedQuality];
-      this.qLive.innerHTML = `Running <strong>${this._selectedQuality.toUpperCase()}</strong>${
-        b ? ` — ${b.desc}` : ''
-      }`;
-    }
-    this._setWarn('');
+    this.root.classList.remove('boot-ready');
+    this._menuAudio.startMusic();
   }
 
   /**
@@ -243,7 +288,27 @@ export class LoadScreen {
   bindConfig(config, camera = null) {
     this._config = config;
     this._camera = camera;
+    if (config) {
+      if (Number.isFinite(config.sensitivity)) {
+        this.prefs.sensMult = clampNum(config.sensitivity / BASE_SENS, 0.2, 3, this.prefs.sensMult);
+      }
+      if (Number.isFinite(config.fov)) {
+        this.prefs.fov = clampNum(config.fov, 65, 120, this.prefs.fov) | 0;
+      }
+      if (config.invertY != null) this.prefs.invertY = !!config.invertY;
+      if (PRESETS.includes(config.quality)) this._selectedQuality = config.quality;
+    }
+    this._syncLookUi();
     this._applyLookToConfig();
+  }
+
+  /**
+   * Link the game AudioSystem so master volume hits both graphs.
+   * @param {import('../audio/index.js').AudioSystem | null} audio
+   */
+  bindAudio(audio) {
+    this._menuAudio.bindGameAudio(audio || null);
+    this._menuAudio.setVolume(this.prefs.masterVol);
   }
 
   /**
@@ -252,7 +317,7 @@ export class LoadScreen {
    */
   setProgress(t, info = {}) {
     if (this._dismissed || !this.root) return;
-    if (this._phase === 'briefing') return;
+    if (this._phase !== 'loading') return;
     const p = Math.max(this._progress, Math.min(1, Number(t) || 0));
     this._progress = p;
     const pct = Math.round(p * 100);
@@ -271,71 +336,218 @@ export class LoadScreen {
     if (this._dismissed || !this.root) return;
     this._ready = true;
     this._progress = 1;
-    this._setPhase('ready');
+    this._phase = 'ready';
+    this._showShell({ ready: true });
     if (this.fillEl) this.fillEl.style.width = '100%';
     if (this.pctEl) this.pctEl.textContent = '100%';
     if (this.labelEl) this.labelEl.textContent = 'Ready';
     if (this.hintEl) this.hintEl.textContent = 'Enter · Space · Click Deploy';
+    if (this.kickerEl) this.kickerEl.textContent = 'Operator Briefing';
     if (meta != null && this.metaEl) this.metaEl.textContent = meta;
-    this.root.classList.add('boot-ready');
-    if (this.deployBtn) {
-      this.deployBtn.disabled = false;
-      this.deployBtn.focus?.({ preventScroll: true });
-    }
+    this._setActionButton('deploy');
+    this.deployBtn?.focus?.({ preventScroll: true });
   }
 
   waitForDeploy() {
     if (this._dismissed || !this.root) return Promise.resolve();
+    if (this._inGame && this._phase === 'playing') return Promise.resolve();
     return new Promise((resolve) => {
       this._deployResolvers.push(resolve);
     });
   }
 
+  /**
+   * Hide the shell and mark match as live. Shell stays alive for pause.
+   * @param {{ immediate?: boolean }} [opts]
+   */
+  enterPlaying({ immediate = false } = {}) {
+    this._inGame = true;
+    this._ready = true;
+    this._phase = 'playing';
+    this._menuAudio.stopMusic();
+    this._hideShell({ immediate });
+  }
+
+  /** Open the shell as the pause / settings menu (Resume CTA). */
+  showPause({ meta } = {}) {
+    if (!this.root) return;
+    this._inGame = true;
+    this._ready = true;
+    this._phase = 'paused';
+    this._qualityLocked = true;
+    if (!this._qCards.length) this._buildQualityCards({ locked: true });
+    this._syncLookFromConfig();
+    this._syncLookUi();
+    this._syncQualityUi();
+    this._setLiveQuality();
+    this._setWarn('');
+
+    if (this.blurbEl) this.blurbEl.hidden = true;
+    if (this.fillEl) this.fillEl.style.width = '100%';
+    if (this.pctEl) this.pctEl.textContent = '100%';
+    if (this.labelEl) this.labelEl.textContent = 'Paused';
+    if (this.hintEl) this.hintEl.textContent = 'Esc · Enter · Space · Click Resume';
+    if (this.kickerEl) this.kickerEl.textContent = 'Paused';
+    if (this.qLabel) this.qLabel.textContent = 'Graphics (locked)';
+    if (meta != null) this.setMeta(meta);
+    else if (this._selectedQuality) {
+      this.setMeta(`${this._selectedQuality.toUpperCase()} · graphics locked`);
+    }
+
+    this._showShell({ ready: true });
+    this._setActionButton('resume');
+    this.deployBtn?.focus?.({ preventScroll: true });
+    this._menuAudio.play('open');
+    this._menuAudio.startMusic();
+  }
+
+  /** Hide the pause shell without killing the controller. */
+  hidePause({ immediate = false } = {}) {
+    if (this._phase !== 'paused' && this._phase !== 'ready') {
+      if (this._inGame) this._phase = 'playing';
+      return;
+    }
+    this._phase = 'playing';
+    this._inGame = true;
+    this._menuAudio.stopMusic();
+    this._hideShell({ immediate });
+  }
+
+  /**
+   * Soft hide for capture / autostart — shell can still open as pause later.
+   * Does not tear down listeners.
+   */
+  hideImmediate() {
+    this._inGame = true;
+    this._ready = true;
+    this._phase = 'playing';
+    this._qualityLocked = true;
+    this._flushLoad();
+    this._flushDeploy();
+    if (this.root) {
+      this.root.classList.add('boot-hidden');
+      this.root.classList.remove('boot-gone');
+    }
+  }
+
+  /** Hard teardown (HMR / dispose). */
   dismiss({ immediate = false } = {}) {
     if (this._dismissed) return;
     this._dismissed = true;
     this._ready = true;
-    this._phase = 'gone';
+    this._phase = 'playing';
     this._flushLoad();
     this._flushDeploy();
     removeEventListener('keydown', this._onKey);
-    if (this.deployBtn) this.deployBtn.removeEventListener('click', this._onDeployClick);
-    if (this.loadBtn) this.loadBtn.removeEventListener('click', this._onLoadClick);
+    if (this.deployBtn) this.deployBtn.removeEventListener('click', this._onCtaClick);
+    this._menuAudio.stopMusic({ immediate: true });
+    this._menuAudio.dispose();
+    this._hideShell({ immediate });
+  }
 
+  // ----------------------------------------------------------------- private
+
+  /**
+   * Purpose of the menu bed: audible proof on load that the app has sound.
+   * Try to start immediately; if the browser suspends autoplay, arm a one-shot
+   * gesture resume so the first key/click unlocks it without a second wait.
+   */
+  _startMenuAudioOnBoot() {
+    if (this._dismissed || this._phase === 'playing') return;
+    if (this.root?.classList.contains('boot-hidden')) return;
+    this._menuAudio.startMusic();
+    this._armMenuMusic();
+  }
+
+  _armMenuMusic() {
+    if (this._musicArmed || !this.root) return;
+    this._musicArmed = true;
+    const kick = () => {
+      this.root?.removeEventListener('pointerdown', kick);
+      removeEventListener('keydown', kick);
+      this._menuAudio.ensure().then((ok) => {
+        if (ok && this._phase !== 'playing') this._menuAudio.startMusic();
+      });
+    };
+    this.root.addEventListener('pointerdown', kick, { passive: true });
+    addEventListener('keydown', kick, { passive: true });
+  }
+
+  _sfx(kind, level) {
+    this._menuAudio.play(kind, level);
+  }
+
+  _setLiveQuality() {
+    if (!this.qLive) return;
+    const b = QUALITY_BLURBS[this._selectedQuality];
+    this.qLive.innerHTML = `Running <strong>${this._selectedQuality.toUpperCase()}</strong>${
+      b ? ` — ${b.desc}` : ''
+    }`;
+  }
+
+  /**
+   * @param {'load' | 'loading' | 'deploy' | 'resume'} mode
+   */
+  _setActionButton(mode) {
+    const btn = this.deployBtn;
+    if (!btn) return;
+    const labels = {
+      load: 'Load',
+      loading: 'Loading',
+      deploy: 'Deploy',
+      resume: 'Resume',
+    };
+    const label = labels[mode] ?? 'Load';
+    if (this.deployLabel) this.deployLabel.textContent = label;
+    else btn.textContent = label;
+
+    btn.classList.toggle('is-loading', mode === 'loading');
+    btn.classList.toggle('is-action', mode === 'load' || mode === 'deploy' || mode === 'resume');
+    btn.disabled = mode === 'loading';
+    btn.setAttribute('aria-busy', mode === 'loading' ? 'true' : 'false');
+  }
+
+  _showShell({ ready = false } = {}) {
     if (!this.root) return;
+    if (this._hideTimer) {
+      clearTimeout(this._hideTimer);
+      this._hideTimer = 0;
+    }
+    this.root.classList.remove('boot-hidden', 'boot-gone');
+    this.root.classList.toggle('boot-ready', !!ready);
+  }
+
+  _hideShell({ immediate = false } = {}) {
+    if (!this.root) return;
+    if (this._hideTimer) {
+      clearTimeout(this._hideTimer);
+      this._hideTimer = 0;
+    }
     if (immediate) {
       this.root.classList.add('boot-hidden');
+      this.root.classList.remove('boot-gone', 'boot-ready');
       return;
     }
     this.root.classList.add('boot-gone');
     const root = this.root;
     const done = () => {
       root.classList.add('boot-hidden');
+      root.classList.remove('boot-gone', 'boot-ready');
       root.removeEventListener('transitionend', done);
+      if (this._hideTimer) {
+        clearTimeout(this._hideTimer);
+        this._hideTimer = 0;
+      }
     };
     root.addEventListener('transitionend', done);
-    setTimeout(done, 700);
+    this._hideTimer = setTimeout(done, 700);
   }
 
-  hideImmediate() {
-    this.dismiss({ immediate: true });
-  }
-
-  // ----------------------------------------------------------------- private
-
-  _setPhase(phase) {
-    this._phase = phase;
-    if (!this.root) return;
-    this.root.classList.remove('boot-phase-briefing', 'boot-phase-loading', 'boot-phase-ready');
-    this.root.classList.add(`boot-phase-${phase === 'gone' ? 'ready' : phase}`);
-    if (this.briefingEl) this.briefingEl.hidden = phase !== 'briefing';
-    if (this.loadingEl) this.loadingEl.hidden = phase === 'briefing' || phase === 'gone';
-  }
-
-  _buildQualityCards(host, bucket, { locked }) {
+  _buildQualityCards({ locked }) {
+    const host = this.qualityHost;
     if (!host) return;
     host.replaceChildren();
-    bucket.length = 0;
+    this._qCards.length = 0;
     for (const name of PRESETS) {
       const blurb = QUALITY_BLURBS[name];
       const btn = document.createElement('button');
@@ -349,7 +561,7 @@ export class LoadScreen {
         `<div class="boot-q-desc">${blurb?.desc ?? ''}</div>`;
       btn.addEventListener('click', () => this._onQualityClick(name, locked));
       host.appendChild(btn);
-      bucket.push(btn);
+      this._qCards.push(btn);
     }
   }
 
@@ -358,10 +570,16 @@ export class LoadScreen {
     if (locked || this._qualityLocked) {
       if (name !== this._selectedQuality) {
         this._setWarn('Reload to change graphics');
+        this._sfx('click', 0.7);
       } else {
         this._setWarn('');
+        this._sfx('tick', 0.5);
       }
       this._syncQualityUi();
+      return;
+    }
+    if (name === this._selectedQuality) {
+      this._sfx('tick', 0.5);
       return;
     }
     this._selectedQuality = name;
@@ -369,25 +587,21 @@ export class LoadScreen {
     this._persistPrefs();
     this._setWarn('');
     this._syncQualityUi();
+    this._setLiveQuality();
+    this._sfx('select');
   }
 
   _syncQualityUi() {
-    const paint = (cards) => {
-      for (const c of cards) {
-        const on = c.dataset.quality === this._selectedQuality;
-        c.classList.toggle('is-on', on);
-        c.classList.toggle('is-locked', this._qualityLocked && !on);
-        c.setAttribute('aria-checked', on ? 'true' : 'false');
-      }
-    };
-    paint(this._qCards);
-    paint(this._qCardsLocked);
+    for (const c of this._qCards) {
+      const on = c.dataset.quality === this._selectedQuality;
+      c.classList.toggle('is-on', on);
+      c.classList.toggle('is-locked', this._qualityLocked && !on);
+      c.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
   }
 
   _setWarn(text) {
-    for (const el of [this.qWarnBrief, this.qWarnLoad]) {
-      if (el) el.textContent = text || '';
-    }
+    if (this.qWarn) this.qWarn.textContent = text || '';
   }
 
   _bindLookControls() {
@@ -398,6 +612,7 @@ export class LoadScreen {
         if (this.sensVal) this.sensVal.textContent = this.prefs.sensMult.toFixed(2);
         this._persistPrefs();
         this._applyLookToConfig();
+        this._tickSfx();
       });
     }
     if (this.fovInput) {
@@ -407,19 +622,57 @@ export class LoadScreen {
         if (this.fovVal) this.fovVal.textContent = String(this.prefs.fov);
         this._persistPrefs();
         this._applyLookToConfig();
+        this._tickSfx();
+      });
+    }
+    if (this.volInput) {
+      this.volInput.value = String(this.prefs.masterVol);
+      this.volInput.addEventListener('input', () => {
+        this.prefs.masterVol = clampNum(parseFloat(this.volInput.value), 0, 1, 0.95);
+        if (this.volVal) this.volVal.textContent = `${Math.round(this.prefs.masterVol * 100)}%`;
+        this._menuAudio.setVolume(this.prefs.masterVol);
+        this._persistPrefs();
+        this._tickSfx();
       });
     }
     if (this.invertHost) {
       this.invertHost.addEventListener('click', (e) => {
         const t = e.target.closest('button[data-inv]');
         if (!t) return;
-        this.prefs.invertY = t.dataset.inv === '1';
+        const next = t.dataset.inv === '1';
+        if (next === !!this.prefs.invertY) {
+          this._sfx('tick', 0.5);
+          return;
+        }
+        this.prefs.invertY = next;
         this._persistPrefs();
         this._syncLookUi();
         this._applyLookToConfig();
+        this._sfx('select');
       });
     }
     this._syncLookUi();
+  }
+
+  /** Rate-limited grain while dragging sliders. */
+  _tickSfx() {
+    const now = performance.now();
+    if (now - this._lastTickAt < 55) return;
+    this._lastTickAt = now;
+    this._sfx('tick', 0.55);
+  }
+
+  _syncLookFromConfig() {
+    const cfg = this._config;
+    if (!cfg) return;
+    if (Number.isFinite(cfg.sensitivity)) {
+      this.prefs.sensMult = clampNum(cfg.sensitivity / BASE_SENS, 0.2, 3, this.prefs.sensMult);
+    }
+    if (Number.isFinite(cfg.fov)) {
+      this.prefs.fov = clampNum(cfg.fov, 65, 120, this.prefs.fov) | 0;
+    }
+    if (cfg.invertY != null) this.prefs.invertY = !!cfg.invertY;
+    if (PRESETS.includes(cfg.quality)) this._selectedQuality = cfg.quality;
   }
 
   _syncLookUi() {
@@ -427,6 +680,8 @@ export class LoadScreen {
     if (this.sensVal) this.sensVal.textContent = this.prefs.sensMult.toFixed(2);
     if (this.fovInput) this.fovInput.value = String(this.prefs.fov);
     if (this.fovVal) this.fovVal.textContent = String(this.prefs.fov | 0);
+    if (this.volInput) this.volInput.value = String(this.prefs.masterVol);
+    if (this.volVal) this.volVal.textContent = `${Math.round(this.prefs.masterVol * 100)}%`;
     if (this.invertHost) {
       for (const b of this.invertHost.querySelectorAll('button[data-inv]')) {
         b.classList.toggle('is-on', (b.dataset.inv === '1') === !!this.prefs.invertY);
@@ -452,20 +707,29 @@ export class LoadScreen {
       sensMult: this.prefs.sensMult,
       fov: this.prefs.fov,
       invertY: this.prefs.invertY,
+      masterVol: this.prefs.masterVol,
       quality: this.prefs.quality ?? this._selectedQuality,
     });
   }
 
-  _resolveLoad() {
+  _resolveCta() {
     if (this._dismissed) return;
-    if (this._phase !== 'briefing') return;
-    this._flushLoad();
-  }
-
-  _resolveDeploy() {
-    if (this._dismissed) return;
-    if (!this._ready) return;
-    this.dismiss({ immediate: false });
+    if (this._phase === 'idle') {
+      this._sfx('confirm');
+      this._flushLoad();
+      return;
+    }
+    if (this._phase === 'paused') {
+      this._sfx('confirm', 0.85);
+      if (this._resumeHandler) this._resumeHandler();
+      else this.hidePause();
+      return;
+    }
+    if (this._phase === 'ready' && this._ready) {
+      this._sfx('confirm');
+      this._flushDeploy();
+      this.enterPlaying({ immediate: false });
+    }
   }
 
   _flushLoad() {

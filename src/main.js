@@ -68,11 +68,11 @@ if (skipMenu) {
     fov: choice.fov,
     invertY: choice.invertY,
   };
+  // Same shell — lock graphics + flip CTA to Loading, then start engine work.
   load.beginLoading({
     meta: `${quality.toUpperCase()} · ${gpu.renderer || 'GPU'}`,
   });
   load.setProgress(0.04, { stage: 'gpu', label: 'Preparing systems…' });
-  await new Promise((r) => requestAnimationFrame(r));
 }
 
 const config = createConfig({
@@ -91,7 +91,8 @@ console.info(
 
 const canvas = document.getElementById('game');
 const engine = new Engine({ canvas, config });
-if (!skipMenu) load.bindConfig(config, engine.camera);
+// Always wire look prefs — shell is also the pause menu (incl. skipMenu path).
+load.bindConfig(config, engine.camera);
 
 // Registration order is irrelevant — Registry topo-sorts on static deps.
 engine
@@ -140,6 +141,9 @@ BOOT FAILURE\n\n${err.stack ?? err.message}</pre>`
 
 const shotApi = installShotApi(engine, { capture, lockstep });
 
+// Menu master volume drives the game mixer too (shell owns the slider).
+load.bindAudio(engine.ctx.peek('audio'));
+
 // Compile every shader permutation before the frame loop starts. Measured: without
 // this, 86 programs compile lazily during play, up to 30 on one frame, producing
 // 3.1-3.9 SECOND stalls. See src/core/prewarm.js.
@@ -157,9 +161,9 @@ const shotApi = installShotApi(engine, { capture, lockstep });
 if (!skipMenu) load.setProgress(WARM_LO, { stage: 'prewarm', label: 'Compiling shaders…' });
 // Prewarm intensity:
 //   ?prewarm=0       off (expect mid-play hitches)
-//   ?prewarm=lite    force the low budget (fast iteration on any quality)
+//   ?prewarm=lite    minimal budget (fastest boot; more mid-play hitches)
 //   ?prewarm=full    force the ultra budget (hitch-free, slow)
-//   omitted          derive from quality — low is lite, ultra is full
+//   omitted          derive from quality — low is hitch-reduced, ultra is full
 const prewarmParam = params.get('prewarm');
 let warmup = { ok: false, reason: 'disabled by ?prewarm=0' };
 if (prewarmParam !== '0') {
@@ -251,6 +255,10 @@ if (lockstep) {
     requestAnimationFrame(readyProbe);
   });
 }
+
+// Boot shell doubles as the in-game pause / settings menu (Resume CTA).
+// skipMenu already called hideImmediate() at boot — shell stays re-openable.
+ui?.menu?.useBootShell?.(load);
 
 if (!skipMenu) {
   load.setProgress(1, { stage: 'ready', label: 'Ready' });

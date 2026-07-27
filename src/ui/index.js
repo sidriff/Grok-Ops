@@ -52,12 +52,14 @@ const PING_LIFE = 1.35;
  *   ui.pause() / ui.resume() / ui.menu.toggle()
  *   ui.debugState('combat'|'menu'|'clean')
  *
+ * Pause presentation is the boot shell (LoadScreen) once main wires
+ * `ui.menu.useBootShell(load)` — same settings panel, Resume instead of Deploy.
+ *
  * ---------------------------------------------------------------------------
  * WHAT THIS SUBSYSTEM READS FROM OTHERS (all optional, all duck-typed)
  * ---------------------------------------------------------------------------
  *   weapons.getHudState() -> { name, mode, ammo, reserve, magSize, reloading,
- *                              reloadProgress, ads, spread, lethalCount,
- *                              tacticalCount }
+ *                              reloadProgress, ads, spread, lethalCount }
  *   player.getHudState()  -> { health, maxHealth, armour, maxArmour, regen,
  *                              move, sprint, crouch, ads, airborne, position,
  *                              dead, deathActive, killerName, respawnIn }
@@ -69,7 +71,7 @@ const PING_LIFE = 1.35;
  * Events consumed: weapon:fire (also minimap shot pings), weapon:reload,
  * damage:dealt, damage:taken, actor:death, player:death, player:state,
  * explosion, resize.
- * Events emitted:  ui:pause, ui:quality, ui:sensitivity, ui:fov, ui:setting.
+ * Events emitted:  ui:pause.
  */
 export class UiSystem {
   static id = 'ui';
@@ -121,7 +123,6 @@ export class UiSystem {
       weaponName: 'M4A1',
       fireMode: 'AUTO',
       lethalCount: 2,
-      tacticalCount: 1,
       move: 0,
       sprint: false,
       crouch: false,
@@ -498,7 +499,6 @@ export class UiSystem {
       if (ws.ads !== undefined) s.ads = !!ws.ads;
       if (ws.spread !== undefined) s.baseSpread = 4 + ws.spread * 40;
       if (ws.lethalCount !== undefined) s.lethalCount = ws.lethalCount;
-      if (ws.tacticalCount !== undefined) s.tacticalCount = ws.tacticalCount;
     }
 
     const ps = s.simulate ? null : this._playerState();

@@ -341,8 +341,8 @@ export class AudioSystem {
       case 'shot':
         return weaponShot(actx, bank, rng, o.profile ?? WEAPON_PROFILES.rifle, {
           when, distance: dist, firstPerson: o.firstPerson,
-          echoBoost: 0.75 + this._space.street * 0.7 + this._space.tight * 0.35 +
-            this._space.tunnel * 0.8 + this._space.open * 0.2,
+          echoBoost: 0.55 + this._space.street * 0.4 + this._space.tight * 0.22 +
+            this._space.tunnel * 0.45 + this._space.open * 0.12,
         });
       case 'whizz': return bulletWhizz(actx, bank, rng, { when, miss: o.miss, gain: o.gain });
       case 'dryfire': return dryFire(actx, bank, rng, { when });
@@ -580,10 +580,10 @@ export class AudioSystem {
     if (firstPerson) {
       // Own weapon: no propagation delay, mostly dry, and the send level is
       // driven by the space probe so the *room* answers the shot — a tight slap
-      // indoors, a long crack down the street.
-      const echo = 0.35 + this._space.tight * 0.5 + this._space.street * 0.9 +
-        this._space.tunnel * 1.0 + this._space.room * 0.75;
-      this._playDry('shot', { profile, firstPerson: true }, 'weapons', echo * 0.6);
+      // indoors, a short canyon crack outdoors (not a rec-center bloom).
+      const echo = 0.22 + this._space.tight * 0.32 + this._space.street * 0.48 +
+        this._space.tunnel * 0.55 + this._space.room * 0.42;
+      this._playDry('shot', { profile, firstPerson: true }, 'weapons', echo * 0.45);
       this.mixer.duck(0.55, 0.1);
     } else {
       this._playAt('shot', x, y, z, { profile, firstPerson: false }, 'weapons', 0.95);
@@ -674,7 +674,7 @@ export class AudioSystem {
     const pos = p.position;
     const dist = this.field.distanceTo(pos.x, pos.y, pos.z);
     this._playAt('explosion', pos.x, pos.y, pos.z, {
-      radius: p.radius ?? 6, level: 1, send: 1.0,
+      radius: p.radius ?? 6, level: 1,
     }, 'weapons', 1);
     this.mixer.duck(0.85, 0.35);
     // Concussion: total inside ~4 m, nothing past ~22 m.

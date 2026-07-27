@@ -133,20 +133,14 @@
         pointer-events: none;
       }
 
-      /* Content panel */
+      /* Content panel — always wide; options visible from first paint. */
       .boot-panel {
         position: relative; z-index: 2;
         margin-left: clamp(2rem, 6vw, 5.5rem);
-        max-width: min(28rem, 88vw);
+        max-width: min(54rem, 92vw);
         padding-left: 1.1rem;
         border-left: 2px solid #ffb02a;
-        transition: max-width 0.35s ease;
       }
-      #boot.boot-phase-loading .boot-panel,
-      #boot.boot-phase-ready .boot-panel {
-        max-width: min(54rem, 92vw);
-      }
-      .boot-phase[hidden] { display: none !important; }
 
       .boot-kicker {
         font-size: 0.68rem;
@@ -241,6 +235,10 @@
 
       #boot-deploy {
         appearance: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.65rem;
         border: 1px solid rgba(255, 176, 42, 0.35);
         background: rgba(255, 176, 42, 0.12);
         color: rgba(255, 220, 160, 0.45);
@@ -250,21 +248,44 @@
         letter-spacing: 0.28em;
         padding: 0.85rem 1.9rem;
         cursor: not-allowed;
+        min-width: 11.5rem;
         transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
       }
-      #boot-deploy:disabled { opacity: 0.85; }
-      #boot.boot-ready #boot-deploy:not(:disabled) {
+      /* Active Loading… state — live amber, not a dead grey Deploy */
+      #boot-deploy.is-loading {
+        border-color: rgba(255, 176, 42, 0.55);
+        background: rgba(255, 176, 42, 0.1);
+        color: rgba(255, 230, 190, 0.92);
+        cursor: wait;
+        box-shadow: 0 0 18px rgba(255, 176, 42, 0.12);
+      }
+      #boot-deploy .boot-spinner {
+        display: none;
+        width: 0.85rem;
+        height: 0.85rem;
+        border: 2px solid rgba(255, 220, 160, 0.25);
+        border-top-color: #ffb02a;
+        border-radius: 50%;
+        flex: 0 0 auto;
+        animation: boot-spin 0.7s linear infinite;
+      }
+      #boot-deploy.is-loading .boot-spinner { display: block; }
+      @keyframes boot-spin {
+        to { transform: rotate(360deg); }
+      }
+      /* Deploy / Resume — solid amber CTA */
+      #boot-deploy.is-action {
         background: #ffb02a;
         border-color: #ffb02a;
         color: #100b02;
         cursor: pointer;
         box-shadow: 0 0 22px rgba(255, 176, 42, 0.28);
       }
-      #boot.boot-ready #boot-deploy:not(:disabled):hover {
+      #boot-deploy.is-action:hover {
         background: #ffc251;
         border-color: #ffc251;
       }
-      #boot.boot-ready #boot-deploy:not(:disabled):focus-visible {
+      #boot-deploy.is-action:focus-visible {
         outline: 2px solid #ffd078;
         outline-offset: 3px;
       }
@@ -301,14 +322,21 @@
       .boot-q-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
+        grid-auto-rows: 1fr; /* equal row heights; cards fill the cell */
         gap: 0.55rem;
         margin-bottom: 0.75rem;
+        align-items: stretch;
       }
       @media (max-width: 520px) {
         .boot-q-grid { grid-template-columns: 1fr; }
       }
       .boot-q-card {
         appearance: none;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        height: 100%;
+        min-height: 0;
         text-align: left;
         font: inherit;
         text-transform: uppercase;
@@ -318,6 +346,7 @@
         color: inherit;
         padding: 0.75rem 0.85rem;
         transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+        box-sizing: border-box;
       }
       .boot-q-card:hover {
         border-color: rgba(255, 176, 42, 0.35);
@@ -337,6 +366,7 @@
         align-items: baseline;
         justify-content: space-between;
         gap: 0.5rem;
+        flex: 0 0 auto;
         font-size: 0.78rem;
         font-weight: 700;
         letter-spacing: 0.22em;
@@ -348,14 +378,24 @@
         letter-spacing: 0.16em;
         color: rgba(255, 176, 42, 0.75);
         font-weight: 600;
+        white-space: nowrap;
       }
+      /* Fixed 3-line slot — every card same height regardless of blurb length. */
       .boot-q-desc {
+        flex: 0 0 auto;
         font-size: 0.62rem;
         letter-spacing: 0.04em;
         line-height: 1.45;
+        height: calc(1.45em * 3);
         text-transform: none;
         color: rgba(196, 210, 219, 0.55);
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;
+        line-clamp: 3;
       }
+      /* Always reserve the warn row so "Reload to change" does not resize the block. */
       .boot-q-warn {
         min-height: 1.1em;
         margin: 0.35rem 0 0.5rem;
@@ -363,29 +403,8 @@
         letter-spacing: 0.16em;
         color: #ffb02a;
       }
-      .boot-q-warn:empty { display: none; }
 
-      #boot-load {
-        appearance: none;
-        border: 1px solid #ffb02a;
-        background: #ffb02a;
-        color: #100b02;
-        font: inherit;
-        font-weight: 700;
-        font-size: 0.78rem;
-        letter-spacing: 0.28em;
-        padding: 0.85rem 1.9rem;
-        cursor: pointer;
-        box-shadow: 0 0 22px rgba(255, 176, 42, 0.28);
-        transition: background 0.15s, border-color 0.15s;
-      }
-      #boot-load:hover { background: #ffc251; border-color: #ffc251; }
-      #boot-load:focus-visible {
-        outline: 2px solid #ffd078;
-        outline-offset: 3px;
-      }
-
-      /* ---- Loading: progress + controls / prefs ---- */
+      /* ---- Loading grid: progress + controls / prefs ---- */
       .boot-load-grid {
         display: grid;
         grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
@@ -464,11 +483,18 @@
         background: rgba(255, 176, 42, 0.14);
         color: rgba(255, 230, 190, 0.95);
       }
+      /* Fixed live-status band under locked graphics — no jump by tier blurb length. */
       .boot-q-live {
         font-size: 0.62rem;
         letter-spacing: 0.14em;
         color: rgba(196, 210, 219, 0.45);
         line-height: 1.5;
+        min-height: calc(1.5em * 2);
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
       }
       .boot-q-live strong {
         color: rgba(255, 220, 160, 0.9);
@@ -479,6 +505,7 @@
         .boot-sky, .boot-horizon, .boot-dust, .boot-sweep, .boot-bar-glow {
           animation: none !important;
         }
+        #boot-deploy .boot-spinner { animation: none !important; }
       }
     </style>
   </head>
@@ -501,89 +528,86 @@
         <div class="boot-sub">Five Minute Firefight</div>
         <div class="boot-rule"></div>
 
-        <!-- Phase 1: what is this + pick graphics, then Load -->
-        <div id="boot-briefing" class="boot-phase">
-          <p class="boot-blurb">
-            <strong>Grok Ops</strong> is a short browser gunfight — one AO, real
-            feel, no asset download circus. Everything is procedural: world,
-            weapons, enemies, audio. Pick a graphics tier that matches your
-            machine, then load the match. Low boots fast for tinkering; ultra
-            is the full show.
-          </p>
-          <div class="boot-section-label">Graphics</div>
-          <div class="boot-q-grid" id="boot-quality" role="radiogroup" aria-label="Graphics quality"></div>
-          <p class="boot-q-warn" id="boot-q-warn" role="status"></p>
-          <div class="boot-actions">
-            <button type="button" id="boot-load">Load</button>
-            <span class="boot-hint" id="boot-brief-hint">Select a tier, then load</span>
-          </div>
-        </div>
+        <!-- Single shell: options + progress from first paint (no phase swap). -->
+        <div class="boot-load-grid" id="boot-body">
+          <div class="boot-load-main">
+            <p class="boot-blurb" id="boot-blurb">
+              <strong>Grok Ops</strong> is a short browser gunfight — one AO, real
+              feel, no asset download circus. Everything is procedural: world,
+              weapons, enemies, audio. Pick a graphics tier, tune look &amp; volume,
+              then load.
+            </p>
 
-        <!-- Phase 2–3: load progress + controls/settings, then Deploy -->
-        <div id="boot-loading" class="boot-phase" hidden>
-          <div class="boot-load-grid">
-            <div class="boot-load-main">
-              <div class="boot-status">
-                <span id="boot-label">Loading…</span>
-                <span id="boot-pct">0%</span>
-              </div>
-              <div class="boot-bar" aria-hidden="true">
-                <div class="boot-bar-fill" id="boot-fill"></div>
-                <div class="boot-bar-glow"></div>
-              </div>
-              <div class="boot-meta" id="boot-meta"></div>
+            <div class="boot-status">
+              <span id="boot-label">Stand by</span>
+              <span id="boot-pct">—</span>
+            </div>
+            <div class="boot-bar" aria-hidden="true">
+              <div class="boot-bar-fill" id="boot-fill"></div>
+              <div class="boot-bar-glow"></div>
+            </div>
+            <div class="boot-meta" id="boot-meta"></div>
 
-              <div class="boot-side-block" style="margin-top:1.25rem">
-                <div class="boot-section-label">Graphics (locked)</div>
-                <div class="boot-q-grid" id="boot-quality-locked" role="group" aria-label="Graphics quality locked"></div>
-                <p class="boot-q-warn" id="boot-q-warn-load" role="status"></p>
-                <p class="boot-q-live" id="boot-q-live"></p>
-              </div>
-
-              <div class="boot-actions">
-                <button type="button" id="boot-deploy" disabled>Deploy</button>
-                <span class="boot-hint" id="boot-hint">Building the AO</span>
-              </div>
+            <div class="boot-side-block" style="margin-top:1.25rem">
+              <div class="boot-section-label" id="boot-q-label">Graphics</div>
+              <div class="boot-q-grid" id="boot-quality" role="radiogroup" aria-label="Graphics quality"></div>
+              <p class="boot-q-warn" id="boot-q-warn" role="status"></p>
+              <p class="boot-q-live" id="boot-q-live"></p>
             </div>
 
-            <div class="boot-load-side">
-              <div class="boot-side-block">
-                <div class="boot-section-label">Controls</div>
-                <ul class="boot-controls">
-                  <li><kbd>WASD</kbd></li><li>Move</li>
-                  <li><kbd>Mouse</kbd></li><li>Look · LMB fire · RMB ADS</li>
-                  <li><kbd>Shift</kbd></li><li>Sprint</li>
-                  <li><kbd>Ctrl</kbd> / <kbd>C</kbd></li><li>Crouch</li>
-                  <li><kbd>Space</kbd></li><li>Jump</li>
-                  <li><kbd>R</kbd></li><li>Reload</li>
-                  <li><kbd>Q</kbd> / <kbd>E</kbd></li><li>Lean</li>
-                  <li><kbd>G</kbd></li><li>Grenade</li>
-                  <li><kbd>Esc</kbd></li><li>Pause / settings</li>
-                </ul>
-              </div>
+            <div class="boot-actions">
+              <button type="button" id="boot-deploy" class="is-action">
+                <span class="boot-spinner" aria-hidden="true"></span>
+                <span class="boot-deploy-label">Load</span>
+              </button>
+              <span class="boot-hint" id="boot-hint">Select a tier, then load</span>
+            </div>
+          </div>
 
-              <div class="boot-side-block">
-                <div class="boot-section-label">Look settings</div>
-                <div class="boot-pref">
-                  <div class="boot-pref-head">
-                    <span>Sensitivity</span>
-                    <span class="boot-pref-val" id="boot-sens-val">1.00</span>
-                  </div>
-                  <input type="range" id="boot-sens" min="0.2" max="3" step="0.01" value="1" />
+          <div class="boot-load-side">
+            <div class="boot-side-block">
+              <div class="boot-section-label">Controls</div>
+              <ul class="boot-controls">
+                <li><kbd>WASD</kbd></li><li>Move</li>
+                <li><kbd>Mouse</kbd></li><li>Look · LMB fire · RMB ADS</li>
+                <li><kbd>Shift</kbd></li><li>Sprint</li>
+                <li><kbd>Ctrl</kbd> / <kbd>C</kbd></li><li>Crouch</li>
+                <li><kbd>Space</kbd></li><li>Jump</li>
+                <li><kbd>R</kbd></li><li>Reload</li>
+                <li><kbd>Q</kbd> / <kbd>E</kbd></li><li>Lean</li>
+                <li><kbd>G</kbd></li><li>Grenade</li>
+                <li><kbd>Esc</kbd></li><li>Pause / settings</li>
+              </ul>
+            </div>
+
+            <div class="boot-side-block">
+              <div class="boot-section-label">Settings</div>
+              <div class="boot-pref">
+                <div class="boot-pref-head">
+                  <span>Sensitivity</span>
+                  <span class="boot-pref-val" id="boot-sens-val">1.00</span>
                 </div>
-                <div class="boot-pref">
-                  <div class="boot-pref-head">
-                    <span>Field of view</span>
-                    <span class="boot-pref-val" id="boot-fov-val">80</span>
-                  </div>
-                  <input type="range" id="boot-fov" min="65" max="120" step="1" value="80" />
+                <input type="range" id="boot-sens" min="0.2" max="3" step="0.01" value="1" />
+              </div>
+              <div class="boot-pref">
+                <div class="boot-pref-head">
+                  <span>Field of view</span>
+                  <span class="boot-pref-val" id="boot-fov-val">80</span>
                 </div>
-                <div class="boot-pref">
-                  <div class="boot-pref-head"><span>Invert look</span></div>
-                  <div class="boot-seg" id="boot-invert" role="group" aria-label="Invert look">
-                    <button type="button" data-inv="0" class="is-on">Off</button>
-                    <button type="button" data-inv="1">On</button>
-                  </div>
+                <input type="range" id="boot-fov" min="65" max="120" step="1" value="80" />
+              </div>
+              <div class="boot-pref">
+                <div class="boot-pref-head">
+                  <span>Master volume</span>
+                  <span class="boot-pref-val" id="boot-vol-val">95%</span>
+                </div>
+                <input type="range" id="boot-vol" min="0" max="1" step="0.01" value="0.95" />
+              </div>
+              <div class="boot-pref">
+                <div class="boot-pref-head"><span>Invert look</span></div>
+                <div class="boot-seg" id="boot-invert" role="group" aria-label="Invert look">
+                  <button type="button" data-inv="0" class="is-on">Off</button>
+                  <button type="button" data-inv="1">On</button>
                 </div>
               </div>
             </div>
