@@ -45,7 +45,7 @@ export class Ambience {
 
     // A little of the bed goes through the reverb so interiors get a wash of
     // outside noise rather than a dead room.
-    const sendTap = gain(actx, 0.22);
+    const sendTap = gain(actx, 0.12);
     outdoorGain.connect(sendTap);
     sendTap.connect(this.mixer.reverbSend);
     this.nodes.push(sendTap);
@@ -240,7 +240,7 @@ export function ambientOneShot(actx, bank, rng, kind, o = {}) {
         ns.start(bt, ns._offset, 0.2);
         end = bt + 0.4;
       }
-      return { node: out, end, send: 0.7 };
+      return { node: out, end, send: 0.4 };
     }
     case 'siren': {
       // Distant two-tone, wailing, drifting in and out.
@@ -257,7 +257,7 @@ export function ambientOneShot(actx, bank, rng, kind, o = {}) {
       ad(g.gain, t0, 0.022 * lvl, dur * 0.3, dur * 0.7);
       o1.start(t0); o2.start(t0);
       o1.stop(t0 + dur + 0.5); o2.stop(t0 + dur + 0.5); wob.stop(t0 + dur + 0.5);
-      return { node: out, end: t0 + dur + 0.6, send: 1.1 };
+      return { node: out, end: t0 + dur + 0.6, send: 0.55 };
     }
     case 'creak': {
       // Metal fatigue: a high-Q band swept slowly, plus a final pop.
@@ -272,7 +272,7 @@ export function ambientOneShot(actx, bank, rng, kind, o = {}) {
       struckResonator(actx, bank, rng, t0 + dur * 0.9, [
         { f: rng.range(400, 1400), q: 20, g: 0.18 * lvl, decay: 0.1 },
       ], 0.003).connect(out);
-      return { node: out, end: t0 + dur * 1.6, send: 0.8 };
+      return { node: out, end: t0 + dur * 1.6, send: 0.42 };
     }
     case 'settle': {
       // Rubble shifting: a handful of grains and a soft low thump.
@@ -287,7 +287,7 @@ export function ambientOneShot(actx, bank, rng, kind, o = {}) {
       sweep(b.frequency, t0, 110, 55, 0.15);
       ad(g.gain, t0, 0.14 * lvl, 0.01, 0.16);
       b.start(t0); b.stop(t0 + 0.4);
-      return { node: out, end: t0 + 1.1, send: 0.6 };
+      return { node: out, end: t0 + 1.1, send: 0.35 };
     }
     case 'birds': {
       const n = 3 + ((rng.u32() % 5) | 0);
@@ -301,7 +301,7 @@ export function ambientOneShot(actx, bank, rng, kind, o = {}) {
         ad(g.gain, bt, 0.05 * lvl, 0.008, 0.06);
         o1.start(bt); o1.stop(bt + 0.2);
       }
-      return { node: out, end: t0 + 1.8, send: 0.9 };
+      return { node: out, end: t0 + 1.8, send: 0.45 };
     }
     case 'vehicle': {
       // A truck passing somewhere out of sight.
@@ -321,7 +321,7 @@ export function ambientOneShot(actx, bank, rng, kind, o = {}) {
       e.connect(eg); series(eg, elp).connect(out);
       ad(eg.gain, t0, 0.035 * lvl, dur * 0.45, dur * 0.55);
       e.start(t0); e.stop(t0 + dur * 1.2);
-      return { node: out, end: t0 + dur * 1.3, send: 0.7 };
+      return { node: out, end: t0 + dur * 1.3, send: 0.4 };
     }
     case 'heli': {
       // Rotor thump: an amplitude-modulated dark noise bed, no sample needed.
@@ -346,7 +346,7 @@ export function ambientOneShot(actx, bank, rng, kind, o = {}) {
       series(w, wbp, wg).connect(out);
       ad(wg.gain, t0, 0.11 * lvl, dur * 0.4, dur * 0.6);
       w.start(t0); w.stop(t0 + dur * 1.2);
-      return { node: out, end: t0 + dur * 1.3, send: 0.9 };
+      return { node: out, end: t0 + dur * 1.3, send: 0.48 };
     }
     case 'shout':
     default: {
@@ -363,7 +363,7 @@ export function ambientOneShot(actx, bank, rng, kind, o = {}) {
       sweep(o1.frequency, t0, rng.range(130, 170), rng.range(95, 125), dur);
       ad(g.gain, t0, 0.2 * lvl, 0.05, dur);
       o1.start(t0); o1.stop(t0 + dur + 0.2);
-      return { node: out, end: t0 + dur + 0.3, send: 1.2 };
+      return { node: out, end: t0 + dur + 0.3, send: 0.55 };
     }
   }
 }

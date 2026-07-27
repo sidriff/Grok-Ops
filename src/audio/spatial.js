@@ -282,9 +282,10 @@ export class SpatialField {
     em.occHS.gain.setValueAtTime(-26 * occ, t);
     em.distGain.gain.setValueAtTime(clamp(atten * (opts.gain ?? 1), 0, 4), t);
 
-    // Farther and more occluded => proportionally wetter.
-    const send = (opts.send ?? 0.25) * (0.5 + Math.min(dist, 90) * 0.022) * (1 + occ * 0.7);
-    em.sendGain.gain.setValueAtTime(clamp(send, 0, 3), t);
+    // Farther and more occluded => a bit wetter, capped so distant fire doesn't
+    // drown in convolver wash (the old 0.022*90 path could hit ~3× send).
+    const send = (opts.send ?? 0.25) * (0.42 + Math.min(dist, 70) * 0.012) * (1 + occ * 0.4);
+    em.sendGain.gain.setValueAtTime(clamp(send, 0, 1.35), t);
 
     em.connectOut(this.mixer.bus(em.busName), this.mixer.reverbSend);
     return em;

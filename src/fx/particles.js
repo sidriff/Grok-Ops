@@ -44,13 +44,25 @@ export const SP = {
   size0: 0.2, size1: 0.3, sizeCurve: 1,
   life: 1, delay: 0, drag: 1.4, gravity: 0,
   rot: 0, spin: 0,
-  /** Velocity-aligned smear: length = size * (1 + stretch * speed). ~1 is one
-   *  frame of motion blur at 60 Hz for a centimetre-scale sprite. */
+  /**
+   * Stretch / trail length.
+   * - Normal particles: velocity smear scale. Length ≈ size * (1 + stretch * |v|).
+   * - PF.TRAIL: world-space ribbon length in **metres** (tip at particle, tail aft).
+   */
   stretch: 0,
   r0: 1, g0: 1, b0: 1, i0: 1,
   r1: 1, g1: 1, b1: 1, i1: 0,
   tile: 0, soft: 0.4, alpha: 1, alphaCurve: 1,
-  turb: 0, turbFreq: 1, seed: 0, flags: 0,
+  turb: 0, turbFreq: 1, seed: 0,
+  /** Packed: bit0 = spark flicker, bit1 = world-space trail ribbon. */
+  flags: 0,
+};
+
+/** `flags` bits written into the particle extra channel. */
+export const PF = {
+  FLICKER: 1,
+  /** Camera-facing ribbon along world velocity; `stretch` is length in metres. */
+  TRAIL: 2,
 };
 
 export function resetSpawn() {
@@ -123,26 +135,91 @@ void main() {
   wpos += vec3( sin( t * f * 1.13 + ph ), sin( t * f * 0.79 + ph * 2.1 ), cos( t * f * 1.31 + ph * 1.7 ) ) * amp;
   wvel += vec3( cos( t * f * 1.13 + ph ), cos( t * f * 0.79 + ph * 2.1 ), -sin( t * f * 1.31 + ph * 1.7 ) ) * ( amp * f );
 
-  vec4 mv = viewMatrix * vec4( wpos, 1.0 );
-  vec3 velView = ( viewMatrix * vec4( wvel, 0.0 ) ).xyz;
-
   float size = mix( aPS.w, aVS.w, pow( n, max( aRot.w, 0.02 ) ) );
   vec2 c = position.xy;
-  vec2 off;
-  if ( aRot.z > 0.001 ) {
-    // velocity-aligned: +Y of the sprite runs along screen-space velocity
-    vec2 d = velView.xy;
+  // flags: bit0 flicker, bit1 world-space trail ribbon
+  int fl = int( aExtra.w + 0.1 );
+
+  vec4 mv;
+  vec2 off = vec2( 0.0 );
+
+  if ( ( fl & 2 ) != 0 ) {
+    // ------------------------------------------------------------------
+    // World-space trail ribbon (tracers).
+    //
+    // Tip at the particle, tail a fixed length *behind* along -velocity.
+    // The quad is a camera-facing strip between those two world points —
+    // NOT a view-plane smear scaled by speed. That old model put a flat
+    // sticker at one depth; head-on and angled shots both looked sideways.
+    // ------------------------------------------------------------------
+    float spd = length( wvel );
+    vec3 wdir = spd > 1e-5 ? wvel / spd : vec3( 0.0, 0.0, 1.0 );
+    // aRot.z = trail length in metres
+    float trailLen = max( aRot.z, size * 2.0 );
+    vec3 wTip = wpos;
+    vec3 wTail = wpos - wdir * trailLen;
+
+    vec3 tipV = ( viewMatrix * vec4( wTip, 1.0 ) ).xyz;
+    vec3 tailV = ( viewMatrix * vec4( wTail, 1.0 ) ).xyz;
+
+    // Unit plane: c.y = +0.5 is sprite +Y (STREAK hot head) → tip
+    //             c.y = -0.5 is sprite -Y (faded tail)       → tail
+    float alongT = c.y + 0.5; // 1 at tip, 0 at tail
+    vec3 posV = mix( tailV, tipV, alongT );
+
+    vec3 beam = tipV - tailV;
+    float beamLen = length( beam );
+    vec3 beamDir = beamLen > 1e-6 ? beam / beamLen : vec3( 0.0, 1.0, 0.0 );
+
+    // Width axis: perpendicular to the beam, facing the camera (view origin).
+    vec3 toCam = -posV;
+    float tcLen = length( toCam );
+    vec3 camDir = tcLen > 1e-6 ? toCam / tcLen : vec3( 0.0, 0.0, 1.0 );
+    vec3 side = cross( beamDir, camDir );
+    float sideLen = length( side );
+    if ( sideLen < 1e-5 ) {
+      // Beam pointed straight at / away from camera — pick a stable side.
+      side = cross( beamDir, vec3( 0.0, 1.0, 0.0 ) );
+      sideLen = length( side );
+      if ( sideLen < 1e-5 ) {
+        side = cross( beamDir, vec3( 1.0, 0.0, 0.0 ) );
+        sideLen = length( side );
+      }
+    }
+    side /= max( sideLen, 1e-6 );
+
+    // c.x ∈ [-0.5, 0.5] → total width = size
+    posV += side * ( c.x * size );
+    // Slight depth bias so the ribbon does not z-fight the head spark
+    posV.z += 0.001;
+
+    mv = vec4( posV, 1.0 );
+    off = vec2( c.x * size, ( c.y ) * trailLen );
+  } else if ( aRot.z > 0.001 ) {
+    // Short motion-blur smear for sparks / muzzle embers (view-plane is fine
+    // at centimetre lengths). Lateral speed only so head-on does not become
+    // a giant vertical bar.
+    mv = viewMatrix * vec4( wpos, 1.0 );
+    vec3 velView = ( viewMatrix * vec4( wvel, 0.0 ) ).xyz;
+    float depth = max( -mv.z, 1e-3 );
+    vec2 screenVel = -velView.xy * mv.z + mv.xy * velView.z;
+    float screenSpeed = length( screenVel ) / depth;
+    float planeSpeed = length( velView.xy );
+    vec2 d = screenSpeed > planeSpeed ? screenVel : velView.xy;
     float dl = length( d );
     vec2 along = dl > 1e-5 ? d / dl : vec2( 0.0, 1.0 );
     vec2 perp = vec2( -along.y, along.x );
-    float len = size * ( 1.0 + aRot.z * length( velView ) );
+    float smear = min( max( planeSpeed, screenSpeed ), length( velView ) );
+    float len = size * ( 1.0 + aRot.z * smear );
     off = along * ( c.y * len ) + perp * ( c.x * size );
+    mv.xy += off;
   } else {
+    mv = viewMatrix * vec4( wpos, 1.0 );
     float rot = aRot.x + aRot.y * t;
     float s = sin( rot ), co = cos( rot );
     off = vec2( c.x * co - c.y * s, c.x * s + c.y * co ) * size;
+    mv.xy += off;
   }
-  mv.xy += off;
 
   vViewZ = -mv.z;
   vSoft = max( aMisc.y, 0.002 );
@@ -155,7 +232,7 @@ void main() {
 
   vec3 col = mix( aCol0.rgb, aCol1.rgb, n );
   float inten = mix( aCol0.w, aCol1.w, n * n );
-  if ( aExtra.w > 0.5 ) inten *= 0.72 + 0.28 * sin( t * 63.0 + ph * 9.0 );  // spark flicker
+  if ( ( fl & 1 ) != 0 ) inten *= 0.72 + 0.28 * sin( t * 63.0 + ph * 9.0 );  // spark flicker
   float a = aMisc.z * pow( max( 1.0 - n, 0.0 ), max( aMisc.w, 0.02 ) ) * smoothstep( 0.0, 0.045, n );
   vCol = vec4( col * inten, a );
 }

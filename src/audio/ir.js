@@ -46,33 +46,33 @@ const SORT = new Float64Array(16);
 export const IR_SPECS = {
   /** Small hard room: bathroom-tile slap, almost no tail. Indoors, tight. */
   tight: {
-    seconds: 0.5, rt60: 0.34, predelay: 0.0022, hfDamp: 0.45, bright: 0.62,
-    diffusion: 0.55, width: 0.4, taps: [0.0035, 0.0061, 0.0092, 0.0134, 0.0177, 0.0231, 0.0288],
-    tapGain: 0.85, slaps: 0, slapTime: 0,
+    seconds: 0.42, rt60: 0.26, predelay: 0.0022, hfDamp: 0.55, bright: 0.55,
+    diffusion: 0.48, width: 0.4, taps: [0.0035, 0.0061, 0.0092, 0.0134, 0.0177, 0.0231, 0.0288],
+    tapGain: 0.7, slaps: 0, slapTime: 0,
   },
-  /** Concrete room / warehouse interior. */
+  /** Concrete room / warehouse interior — shorter than a real gym on purpose. */
   room: {
-    seconds: 1.5, rt60: 1.05, predelay: 0.006, hfDamp: 0.55, bright: 0.5,
-    diffusion: 0.8, width: 0.6, taps: [0.009, 0.0143, 0.021, 0.0296, 0.0381, 0.0492, 0.0613, 0.078],
-    tapGain: 0.6, slaps: 0, slapTime: 0,
+    seconds: 1.15, rt60: 0.72, predelay: 0.005, hfDamp: 0.62, bright: 0.42,
+    diffusion: 0.72, width: 0.55, taps: [0.009, 0.0143, 0.021, 0.0296, 0.0381, 0.0492, 0.0613, 0.078],
+    tapGain: 0.48, slaps: 0, slapTime: 0,
   },
-  /** Street canyon: two parallel façades — slapback plus a medium tail. */
+  /** Street canyon: two parallel façades — a couple of slaps, not a flutter. */
   street: {
-    seconds: 2.0, rt60: 1.45, predelay: 0.012, hfDamp: 0.42, bright: 0.56,
-    diffusion: 0.62, width: 0.85, taps: [0.017, 0.029, 0.046, 0.063, 0.088, 0.112, 0.147, 0.19, 0.24],
-    tapGain: 0.72, slaps: 7, slapTime: 0.058,
+    seconds: 1.55, rt60: 0.95, predelay: 0.012, hfDamp: 0.52, bright: 0.48,
+    diffusion: 0.55, width: 0.85, taps: [0.017, 0.029, 0.046, 0.063, 0.088, 0.112, 0.147, 0.19],
+    tapGain: 0.52, slaps: 3, slapTime: 0.072,
   },
-  /** Long corridor / tunnel: strong flutter echo, dark. */
+  /** Long corridor / tunnel: a few dark repeats, not a basketball-court ring. */
   tunnel: {
-    seconds: 2.2, rt60: 1.8, predelay: 0.004, hfDamp: 0.7, bright: 0.3,
-    diffusion: 0.5, width: 0.35, taps: [0.006, 0.012, 0.019, 0.027, 0.037, 0.049, 0.064],
-    tapGain: 0.9, slaps: 12, slapTime: 0.031,
+    seconds: 1.7, rt60: 1.15, predelay: 0.004, hfDamp: 0.75, bright: 0.26,
+    diffusion: 0.45, width: 0.35, taps: [0.006, 0.012, 0.019, 0.027, 0.037, 0.049, 0.064],
+    tapGain: 0.65, slaps: 5, slapTime: 0.042,
   },
   /** Open ground: only far, dark, sparse returns — the rolling boom. */
   open: {
-    seconds: 2.8, rt60: 1.15, predelay: 0.05, hfDamp: 0.9, bright: 0.16,
-    diffusion: 0.9, width: 1.0, taps: [0.07, 0.115, 0.18, 0.26, 0.35, 0.48, 0.62],
-    tapGain: 0.3, slaps: 0, slapTime: 0,
+    seconds: 2.2, rt60: 0.85, predelay: 0.05, hfDamp: 0.92, bright: 0.14,
+    diffusion: 0.85, width: 1.0, taps: [0.07, 0.115, 0.18, 0.26, 0.35, 0.48],
+    tapGain: 0.22, slaps: 0, slapTime: 0,
   },
 };
 
@@ -141,19 +141,21 @@ export function generateIR(actx, rng, spec) {
       const tt = (spec.predelay + spec.slapTime * k * rng.range(0.985, 1.015)) * wob;
       const idx = Math.floor(tt * sr);
       if (idx >= len - 64) continue;
-      const g = 0.55 * Math.pow(0.68, k) * (rng.float() < 0.5 ? -1 : 1);
+      // Decay harder per bounce so street/tunnel don't build a gym flutter.
+      const g = 0.38 * Math.pow(0.58, k) * (rng.float() < 0.5 ? -1 : 1);
       // Slaps are band-limited: a street echo is mid-heavy, never a click.
       let s1 = 0, s2 = 0;
       for (let s = 0; s < 400 && idx + s < len; s++) {
         const x = rng.signed() * Math.exp(-s / 90);
         s1 += 0.35 * (x - s1);
         s2 += 0.35 * (s1 - s2);
-        d[idx + s] += g * s2 * 3.2;
+        d[idx + s] += g * s2 * 2.4;
       }
     }
   }
 
-  normalise(buf, 0.42);
+  // Peak target kept modest so five blended convolvers don't wash the dry bus.
+  normalise(buf, 0.34);
   return buf;
 }
 

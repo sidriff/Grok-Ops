@@ -120,7 +120,9 @@ export class Mixer {
 
     this.spaces = {};
     this.spaceNames = Object.keys(IR_SPECS);
-    this.reverbReturn = gain(actx, 0.9);
+    // Keep the return well under unity so dry crack still owns the shot; 0.9
+    // was reading as an empty gym with every hard surface in the IR set.
+    this.reverbReturn = gain(actx, 0.48);
     this.reverbReturn.connect(this.worldSum);
     this._irReady = false;
 

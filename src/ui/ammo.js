@@ -27,19 +27,10 @@ function fragIcon(parent) {
   return s;
 }
 
-function flashIcon(parent) {
-  const s = svg('svg', { viewBox: '0 0 16 20', fill: 'rgba(255,255,255,.92)' }, parent);
-  svg('path', { d: 'M6.2 0h3.6v2.4H6.2z' }, s);
-  svg('path', { d: 'M4.2 3.1h7.6c.5 0 .9.4.9.9v13.4c0 1.4-1.1 2.6-2.6 2.6H5.9c-1.4 0-2.6-1.2-2.6-2.6V4c0-.5.4-.9.9-.9z' }, s);
-  svg('rect', { x: 4.6, y: 6.2, width: 6.8, height: 1.2, fill: 'rgba(0,0,0,.45)' }, s);
-  svg('rect', { x: 4.6, y: 9.1, width: 6.8, height: 1.2, fill: 'rgba(0,0,0,.45)' }, s);
-  return s;
-}
-
 /**
  * Ammo / weapon readout, bottom right.
  *
- *              ▲ 2   ✦ 1     equipment — its OWN row
+ *              ▲ 2            grenades — its OWN row
  *   [AUTO]        M4A1
  *              28 / 210
  *   ▮▮▮▮▮▮▮▮▮▮▯▯▯▯▯▯▯        magazine state, one pip per round
@@ -61,9 +52,6 @@ export class AmmoPanel {
     this.slotL = el('div', 'ow-slot', this.equip);
     fragIcon(this.slotL);
     this.slotLn = el('span', null, this.slotL, '2');
-    this.slotT = el('div', 'ow-slot', this.equip);
-    flashIcon(this.slotT);
-    this.slotTn = el('span', null, this.slotT, '1');
 
     const head = el('div', 'ow-ammo-head', this.root);
     this.mode = el('div', 'ow-ammo-mode', head, 'AUTO');
@@ -95,7 +83,7 @@ export class AmmoPanel {
 
   /**
    * @param {object} s { name, mode, ammo, reserve, magSize, reloading,
-   *                     reloadProgress, lethal, lethalCount, tacticalCount }
+   *                     reloadProgress, lethalCount }
    */
   update(dt, s) {
     const ammo = Math.max(0, s.ammo | 0);
@@ -169,11 +157,8 @@ export class AmmoPanel {
 
     // --- equipment --------------------------------------------------------
     const lc = s.lethalCount ?? 0;
-    const tc = s.tacticalCount ?? 0;
     setText(this.slotLn, lc);
-    setText(this.slotTn, tc);
     setClass(this.slotL, 'empty', lc <= 0);
-    setClass(this.slotT, 'empty', tc <= 0);
   }
 
   /**

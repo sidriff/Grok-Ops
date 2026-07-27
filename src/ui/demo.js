@@ -41,7 +41,6 @@ export class CombatDemo {
     s.weaponName = 'M4A1';
     s.fireMode = 'AUTO';
     s.lethalCount = 2;
-    s.tacticalCount = 1;
     s.move = 0.34;
     s.sprint = false;
     s.crouch = false;

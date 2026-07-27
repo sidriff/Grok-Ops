@@ -30,69 +30,69 @@ const IMPACT = {
   concrete: {
     bright: 0.85, bodyF: 180, bodyDecay: 0.05, ring: null,
     tex: { kind: 'white', f: 2600, q: 0.9, decay: 0.075, level: 0.75 },
-    dust: { f: 1200, decay: 0.3, level: 0.16 }, grains: 5, wet: 0.4,
+    dust: { f: 1200, decay: 0.3, level: 0.16 }, grains: 5, wet: 0.26,
   },
   plaster: {
     bright: 0.7, bodyF: 220, bodyDecay: 0.035, ring: null,
     tex: { kind: 'white', f: 1900, q: 0.8, decay: 0.05, level: 0.6 },
-    dust: { f: 900, decay: 0.42, level: 0.26 }, grains: 6, wet: 0.42,
+    dust: { f: 900, decay: 0.42, level: 0.26 }, grains: 6, wet: 0.28,
   },
   metal: {
     bright: 1.0, bodyF: 150, bodyDecay: 0.035,
     ring: [{ f: 1750, q: 34, g: 0.42, decay: 0.28 }, { f: 3120, q: 26, g: 0.3, decay: 0.17 },
       { f: 5400, q: 18, g: 0.18, decay: 0.09 }, { f: 8100, q: 12, g: 0.09, decay: 0.05 }],
     tex: { kind: 'white', f: 5200, q: 1.2, decay: 0.03, level: 0.5 },
-    dust: null, grains: 3, wet: 0.5,
+    dust: null, grains: 3, wet: 0.32,
   },
   wood: {
     bright: 0.6, bodyF: 320, bodyDecay: 0.055,
     ring: [{ f: 420, q: 14, g: 0.35, decay: 0.11 }, { f: 780, q: 11, g: 0.2, decay: 0.07 },
       { f: 1520, q: 8, g: 0.1, decay: 0.04 }],
     tex: { kind: 'white', f: 1500, q: 1.0, decay: 0.045, level: 0.45 },
-    dust: null, grains: 5, wet: 0.32,
+    dust: null, grains: 5, wet: 0.22,
   },
   dirt: {
     bright: 0.25, bodyF: 120, bodyDecay: 0.07, ring: null,
     tex: { kind: 'brown', f: 700, q: 0.7, decay: 0.09, level: 0.7 },
-    dust: { f: 600, decay: 0.34, level: 0.2 }, grains: 4, wet: 0.2,
+    dust: { f: 600, decay: 0.34, level: 0.2 }, grains: 4, wet: 0.14,
   },
   sand: {
     bright: 0.18, bodyF: 105, bodyDecay: 0.055, ring: null,
     tex: { kind: 'white', f: 1500, q: 0.5, decay: 0.13, level: 0.5 },
-    dust: { f: 1000, decay: 0.4, level: 0.24 }, grains: 3, wet: 0.16,
+    dust: { f: 1000, decay: 0.4, level: 0.24 }, grains: 3, wet: 0.12,
   },
   glass: {
     bright: 1.0, bodyF: 500, bodyDecay: 0.02,
     ring: [{ f: 3400, q: 40, g: 0.34, decay: 0.13 }, { f: 5300, q: 34, g: 0.26, decay: 0.1 },
       { f: 7900, q: 26, g: 0.2, decay: 0.07 }, { f: 11200, q: 18, g: 0.12, decay: 0.05 }],
     tex: { kind: 'crackle', f: 6000, q: 0.9, decay: 0.28, level: 0.6 },
-    dust: null, grains: 11, wet: 0.46,
+    dust: null, grains: 11, wet: 0.3,
   },
   water: {
     bright: 0.3, bodyF: 260, bodyDecay: 0.03, ring: null,
     tex: { kind: 'white', f: 1800, q: 0.8, decay: 0.14, level: 0.75, rise: true },
-    dust: null, grains: 4, wet: 0.3, bubbles: true,
+    dust: null, grains: 4, wet: 0.22, bubbles: true,
   },
   foliage: {
     bright: 0.25, bodyF: 380, bodyDecay: 0.02, ring: null,
     tex: { kind: 'crackle', f: 2600, q: 0.8, decay: 0.16, level: 0.6 },
-    dust: null, grains: 7, wet: 0.22,
+    dust: null, grains: 7, wet: 0.15,
   },
   fabric: {
     bright: 0.2, bodyF: 150, bodyDecay: 0.045, ring: null,
     tex: { kind: 'white', f: 900, q: 0.6, decay: 0.06, level: 0.4 },
-    dust: { f: 700, decay: 0.2, level: 0.1 }, grains: 2, wet: 0.18,
+    dust: { f: 700, decay: 0.2, level: 0.1 }, grains: 2, wet: 0.12,
   },
   flesh: {
     bright: 0.35, bodyF: 128, bodyDecay: 0.06, ring: null,
     tex: { kind: 'white', f: 620, q: 1.4, decay: 0.055, level: 0.62 },
-    dust: null, grains: 3, wet: 0.24, wet_squelch: true,
+    dust: null, grains: 3, wet: 0.16, wet_squelch: true,
   },
   rubber: {
     bright: 0.3, bodyF: 190, bodyDecay: 0.04,
     ring: [{ f: 260, q: 9, g: 0.2, decay: 0.06 }],
     tex: { kind: 'white', f: 1100, q: 0.9, decay: 0.03, level: 0.3 },
-    dust: null, grains: 1, wet: 0.2,
+    dust: null, grains: 1, wet: 0.14,
   },
 };
 
@@ -627,7 +627,7 @@ export function explosion(actx, bank, rng, o = {}) {
     end = Math.max(end, t0 + dur * 1.3);
   }
 
-  return { node: out, end: end + 0.1, send: 0.85 + far * 0.5 };
+  return { node: out, end: end + 0.1, send: 0.48 + far * 0.28 };
 }
 
 /** A body hitting the ground: mass, gear, and a wet slap. */
