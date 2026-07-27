@@ -6,7 +6,8 @@
  * hitch, audio underruns, and the fight feels broken before design even starts.
  *
  * This module reads WebGL renderer strings (and a few capability signals) and
- * returns a quality tier that should stay playable. Override anytime with `?q=`.
+ * returns a quality tier that should stay playable. **Auto never picks ultra** —
+ * high is the ceiling; ultra stays for `?q=ultra`, capture mode, or the menu.
  */
 
 /** @typedef {'low'|'medium'|'high'|'ultra'} QualityTier */
@@ -236,20 +237,18 @@ export function classifyGpu(info) {
 
   // Clamp and bucket. Thresholds bias toward medium — our north star is a
   // playable five-minute fight, not maxed post.
+  //
+  // Ultra is never auto-selected. Profiled on RTX 5070 Ti (1080p firefight):
+  // high already sustains p99 ≥ 60 fps; ultra is for capture / `?q=ultra` /
+  // the settings menu, not a default that reintroduces 4K CSM on every strong card.
   score = Math.max(0, Math.min(100, score));
   /** @type {QualityTier} */
   let quality = 'medium';
   if (score < 28) quality = 'low';
   else if (score < 52) quality = 'medium';
-  else if (score < 78) quality = 'high';
-  else quality = 'ultra';
+  else quality = 'high'; // score ≥ 52, including former ultra band
 
-  // Never auto-ultra on very high DPR without discrete-class score; 3MP+
-  // internal buffers are what made upstream unplayable on laptops.
-  if (quality === 'ultra' && info.dpr >= 2 && score < 88) {
-    quality = 'high';
-    notes.push('capped ultra→high at high DPR');
-  }
+  if (score >= 78) notes.push('auto-capped at high (ultra is opt-in)');
 
   const reason = notes.length ? notes.join(', ') : `score ${score}`;
   return { quality, score, reason };
