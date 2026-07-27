@@ -1,5 +1,6 @@
 import { Engine } from './core/engine.js';
-import { createConfig } from './core/config.js';
+import { createConfig, QUALITY_PRESETS } from './core/config.js';
+import { detectGraphics } from './core/gpu.js';
 
 import { RenderSystem } from './render/index.js';
 import { MaterialSystem } from './materials/index.js';
@@ -24,10 +25,28 @@ const capture = params.get('capture') === '1';
 // free-run. See the long comment in src/dev/shots.js.
 const lockstep = capture && params.get('lockstep') === '1';
 
+// Quality: explicit `?q=` wins. Capture tools default to ultra for stable
+// baselines. Everyone else gets GPU auto-detect so we stop shipping hitch-city.
+const forcedQ = params.get('q');
+const gpu = detectGraphics();
+const quality =
+  forcedQ && QUALITY_PRESETS[forcedQ]
+    ? forcedQ
+    : capture
+      ? 'ultra'
+      : gpu.quality;
+
 const config = createConfig({
-  quality: params.get('q') ?? 'ultra',
+  quality,
   deterministic: capture,
 });
+config.gpu = gpu;
+console.info(
+  `[grok-ops] quality=${quality}` +
+    (forcedQ ? ' (forced)' : capture ? ' (capture)' : ' (auto)') +
+    ` — ${gpu.renderer || 'unknown GPU'} | score ${gpu.score} | ${gpu.reason}`
+);
+window.__GPU__ = gpu;
 
 const canvas = document.getElementById('game');
 

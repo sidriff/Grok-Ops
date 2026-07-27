@@ -14,8 +14,11 @@ npm run dev          # http://127.0.0.1:5173
 Click the canvas to lock the cursor. WASD move, mouse aim, LMB fire, RMB ADS,
 R reload, Shift sprint, Ctrl crouch, Space jump, Q/E lean, Esc release.
 
-Force a quality tier: `?q=low|medium|high|ultra`. Default is GPU auto-detect
-(when landed). Capture tools still pass explicit `q` as needed.
+**Graphics:** boots with GPU auto-detect (`src/core/gpu.js`) and picks
+`low|medium|high|ultra` plus a max device-pixel-ratio for that tier. Force a
+tier with `?q=low|medium|high|ultra`. Capture mode (`?capture=1`) still defaults
+to ultra for baselines. Open the console for `[grok-ops] quality=…` and inspect
+`window.__GPU__`.
 
 ## North star
 

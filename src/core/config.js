@@ -21,6 +21,8 @@ export const UNITS = {
 export const QUALITY_PRESETS = {
   low: {
     renderScale: 0.72,
+    /** Cap devicePixelRatio so internal buffers stay sane on Retina/4K. */
+    maxPixelRatio: 1,
     shadowMapSize: 1024,
     cascades: 3,
     shadowDistance: 60,
@@ -36,6 +38,7 @@ export const QUALITY_PRESETS = {
   },
   medium: {
     renderScale: 0.85,
+    maxPixelRatio: 1.25,
     shadowMapSize: 2048,
     cascades: 3,
     shadowDistance: 90,
@@ -51,6 +54,7 @@ export const QUALITY_PRESETS = {
   },
   high: {
     renderScale: 1.0,
+    maxPixelRatio: 1.5,
     shadowMapSize: 2048,
     cascades: 4,
     shadowDistance: 140,
@@ -66,6 +70,7 @@ export const QUALITY_PRESETS = {
   },
   ultra: {
     renderScale: 1.0,
+    maxPixelRatio: 1.75,
     shadowMapSize: 4096,
     cascades: 4,
     shadowDistance: 200,
@@ -82,7 +87,8 @@ export const QUALITY_PRESETS = {
 };
 
 export const DEFAULTS = {
-  quality: 'ultra',
+  /** Boot picks a tier via `detectGraphics()` unless `?q=` or capture mode. */
+  quality: 'medium',
   fov: 80, // horizontal-ish vertical FOV, CoD default feel
   adsFovScale: 0.72,
   sensitivity: 0.0022,

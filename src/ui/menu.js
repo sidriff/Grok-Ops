@@ -85,7 +85,8 @@ export class PauseMenu {
       this.sens.set(1);
       this.fov.set(80);
       this.ctx.config.invertY = false;
-      this.setQuality('ultra');
+      // Match boot default / auto floor — ultra is a capture preset, not "reset".
+      this.setQuality(this.ctx.config.gpu?.quality ?? 'medium');
     });
     el('div', 'hint', inner, 'ESC RESUME · WASD MOVE · SHIFT SPRINT · R RELOAD · F USE');
 

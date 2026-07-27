@@ -866,7 +866,10 @@ export class RenderSystem {
   // ==========================================================================
 
   resize(w, h, ctx) {
-    const pr = Math.min(globalThis.devicePixelRatio || 1, 1.5);
+    // Cap DPR from the active quality preset (GPU auto-detect sets this).
+    // Upstream hard-capped at 1.5; low/medium go lower so Retina is not 3MP+.
+    const cap = this.q?.maxPixelRatio ?? ctx?.config?.q?.maxPixelRatio ?? 1.5;
+    const pr = Math.min(globalThis.devicePixelRatio || 1, cap);
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
 
