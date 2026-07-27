@@ -692,7 +692,16 @@ export class UiSystem {
         const p = a.position;
         if (!p) continue;
         const friendly = a.friendly === true || a.team === 0;
-        const heading = a.heading ?? (a.yaw !== undefined ? (a.yaw * 180) / Math.PI : 0);
+        // Map heading matches the player arrow: atan2(fwdX, -fwdZ) so 0° = north (-Z).
+        // Agent yaw is different — body forward is (sin yaw, cos yaw), i.e. 0 = +Z.
+        let heading = 0;
+        if (a.heading != null && Number.isFinite(a.heading)) {
+          heading = a.heading;
+        } else if (a.yaw !== undefined) {
+          const fx = Math.sin(a.yaw);
+          const fz = Math.cos(a.yaw);
+          heading = (Math.atan2(fx, -fz) * 180) / Math.PI;
+        }
 
         // Friendlies always plot; enemies need range + facing + clear LOS.
         let spotted = friendly;
