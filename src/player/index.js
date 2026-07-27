@@ -56,12 +56,18 @@
  *   p.suppression  p.damageIndicators
  *   p.applyDamage(amount, fromVector3, opts)   p.heal(a)   p.addSuppression(a)
  *
+ * DEATH / RESPAWN
+ *   p.deathActive     true while the death cam + countdown are running
+ *   p.respawnIn       seconds remaining (0 when alive)
+ *   p.killerName      who got the credit for the last death
+ *   p.respawn(index)  clear death, teleport to a spawn point, restore control
+ *
  * CONTROL
  *   p.setControlEnabled(bool)     shot harness / cutscenes
  *   p.teleport(eyePosition, rotationEulerOrYaw)
  *   p.respawn(index)
  *   p.debugState(name)            'sprint'|'slide'|'crouch'|'hurt'|'critical'|
- *                                 'air'|'reset'
+ *                                 'air'|'reset'|'kill'
  *
  * EVENTS EMITTED
  *   player:state      { stance, sprinting, sliding, ads, state, grounded, ... }
@@ -72,7 +78,8 @@
  *   player:heartbeat  { strength, fraction }                                  *
  *   player:mantle     { kind, height }                                        *
  *   player:jump       { position }                                            *
- *   player:death      { position }                                            *
+ *   player:death      { position, killer, killerName, cause, respawnIn }      *
+ *   player:respawn    { position, index }                                     *
  *   (*) not in the canonical table in ARCHITECTURE.md — additive, optional, and
  *   safe to ignore. The canonical `player:state` payload carries `health` too so
  *   a listener that only knows the documented four fields still gets everything.
@@ -83,7 +90,8 @@ import { Movement } from './movement.js';
 import { CameraRig } from './camera.js';
 import { Health } from './health.js';
 import { LowHealthPass } from './lowhealth.js';
-import { STANCE, MOVE, CAMERA, HEALTH, FOOTSTEP, JUMP_SPEED } from './tuning.js';
+import { DeathCam } from './death.js';
+import { STANCE, MOVE, CAMERA, HEALTH, FOOTSTEP, JUMP_SPEED, DEATH } from './tuning.js';
 import { clamp, clamp01, lerp, approach, DEG } from './springs.js';
 
 export class PlayerSystem {
@@ -108,6 +116,23 @@ export class PlayerSystem {
     this._lookFrame = -1;
     this._prevYaw = 0;
 
+    /** Death cam controller; created in init. */
+    this.deathCam = null;
+    this._spawnIndex = 0;
+    this._lastKiller = null;
+    this._lastKillerName = null;
+    this._lastDamageCause = 'bullet';
+    this._lastHitPoint = new THREE.Vector3();
+    this._lastHitDir = new THREE.Vector3(0, 0, 1);
+    this._deathPayload = {
+      position: new THREE.Vector3(),
+      killer: null,
+      killerName: 'ENEMY',
+      cause: 'bullet',
+      respawnIn: DEATH.respawnDelay,
+    };
+    this._respawnPayload = { position: new THREE.Vector3(), index: 0 };
+
     // preallocated event payloads
     this._statePayload = {
       stance: 'stand', sprinting: false, sliding: false, ads: false,
@@ -126,9 +151,11 @@ export class PlayerSystem {
       health: HEALTH.max, maxHealth: HEALTH.max, regen: false, dead: false,
       move: 0, sprint: false, crouch: false, ads: false, airborne: false,
       suppression: 0, position: null,
+      killerName: '', respawnIn: 0, deathActive: false,
     };
 
     this._tmp = new THREE.Vector3();
+    this._tmp2 = new THREE.Vector3();
     /** Last emitted discrete state, compared field-wise so no string is built. */
     this._prev = {
       state: '', stance: '', sprinting: false, tacticalSprint: false,
@@ -149,9 +176,10 @@ export class PlayerSystem {
     this.movement = new Movement(ctx, this);
     this.rig = new CameraRig(ctx);
     this.health = new Health(ctx, this.rig);
+    this.deathCam = new DeathCam(ctx);
 
     // ---- spawn -----------------------------------------------------------
-    const spawn = this._resolveSpawn();
+    const spawn = this._resolveSpawn(0);
     this.movement.init(this.physics, spawn.feet);
     this.movement.yaw = spawn.yaw;
     this.movement.pitch = 0;
@@ -196,10 +224,13 @@ export class PlayerSystem {
     );
   }
 
-  _resolveSpawn() {
+  _resolveSpawn(index = 0) {
     const world = this.ctx.peek('world');
-    const out = { feet: new THREE.Vector3(0, 0.2, 0), yaw: 0 };
-    const sp = world?.spawn?.(0);
+    const out = { feet: new THREE.Vector3(0, 0.2, 0), yaw: 0, index: 0 };
+    const n = world?.spawnPoints?.length ?? 0;
+    const i = n > 0 ? ((index % n) + n) % n : 0;
+    out.index = i;
+    const sp = world?.spawn?.(i);
     if (sp?.position) {
       out.feet.copy(sp.position);
       out.yaw = sp.yaw ?? 0;
@@ -208,6 +239,16 @@ export class PlayerSystem {
     const gy = this.physics.groundHeight(out.feet.x, out.feet.z, out.feet.y + 6);
     out.feet.y = Number.isFinite(gy) ? gy + 0.03 : out.feet.y + 0.2;
     return out;
+  }
+
+  /** Next spawn index: advance at least one slot so you do not pop back on the corpse. */
+  _nextSpawnIndex() {
+    const world = this.ctx.peek('world');
+    const n = world?.spawnPoints?.length ?? 0;
+    if (n <= 1) return 0;
+    const step = 1 + this.rng.int(0, Math.max(0, n - 2));
+    this._spawnIndex = (this._spawnIndex + step) % n;
+    return this._spawnIndex;
   }
 
   /* ==================================================================== */
@@ -265,6 +306,8 @@ export class PlayerSystem {
 
   fixedUpdate(h, ctx) {
     if (!this.movement) return;
+    // Death cam owns the camera — do not advance look / movement under it.
+    if (this.deathCam?.active) return;
     this._consumeLook(ctx.time.dt > 1e-5 ? ctx.time.dt : h);
     this.movement.latchInput(ctx.time.frame);
     if (!this.controlEnabled) return;
@@ -274,6 +317,16 @@ export class PlayerSystem {
 
   update(dt, ctx) {
     if (!this.movement) return;
+
+    if (this.deathCam?.active) {
+      this.health.update(dt);
+      this.lowHealthPass?.sync(this.health);
+      this._syncHitbox();
+      if (this.deathCam.update(dt)) this.respawn();
+      this._publishState();
+      return;
+    }
+
     this._consumeLook(dt);
     this.movement.latchInput(ctx.time.frame);
 
@@ -333,7 +386,11 @@ export class PlayerSystem {
       // Fall damage — CoD only hurts you past a real drop.
       const L = CAMERA.land;
       if (speed > L.damageSpeed) {
+        this._lastDamageCause = 'fall';
+        this._lastKiller = null;
+        this._lastKillerName = 'FALL DAMAGE';
         this.health.damage((speed - L.damageSpeed) * L.damagePerSpeed, null, { type: 'fall' });
+        this._checkDeath();
       }
       if (mag > 0.35) this.movement._footHold = FOOTSTEP.landHold;
     }
@@ -420,6 +477,7 @@ export class PlayerSystem {
     // `point` to where the round landed (which is the player), and `from` to the
     // muzzle. Using `point` pinned every arc to dead ahead.
     const from = e.from ?? e.source?.position ?? e.point ?? null;
+    this._rememberAttacker(e.source ?? null, from, 'bullet', e.point ?? null);
     this.applyDamage(e.amount ?? 0, from, { type: 'bullet' });
   }
 
@@ -435,8 +493,86 @@ export class PlayerSystem {
     this.rig.addTrauma(clamp01(falloff * 1.4));
     this.health.addSuppression(HEALTH.suppression.perExplosion * falloff);
     if (clear && falloff > 0.02) {
+      this._rememberAttacker(e.source ?? e.owner ?? null, e.position, 'explosion', e.position);
       this.applyDamage((e.damage ?? 90) * falloff, e.position, { type: 'explosion' });
     }
+  }
+
+  _rememberAttacker(source, from, cause, point) {
+    this._lastDamageCause = cause;
+    this._lastKiller = source && typeof source === 'object' ? source : null;
+    this._lastKillerName = this._killerLabel(source, cause);
+    if (point) this._lastHitPoint.copy(point);
+    else if (from) this._lastHitPoint.copy(from);
+    else this._lastHitPoint.copy(this.ctx.camera.position);
+    if (from) {
+      this._lastHitDir.copy(this.ctx.camera.position).sub(from);
+      if (this._lastHitDir.lengthSq() < 1e-6) this._lastHitDir.set(0, 0, 1);
+      else this._lastHitDir.normalize();
+    }
+  }
+
+  _killerLabel(source, cause) {
+    if (source && typeof source === 'object') {
+      return source.name ?? source.callsign ?? source.variantName?.toUpperCase?.() ?? 'ENEMY';
+    }
+    if (typeof source === 'string') return source;
+    if (cause === 'fall') return 'FALL DAMAGE';
+    if (cause === 'explosion') return 'EXPLOSION';
+    return 'ENEMY';
+  }
+
+  /**
+   * If health just hit zero, freeze the player, drop a corpse, and start the
+   * overhead death cam + respawn countdown.
+   */
+  _checkDeath() {
+    if (!this.health.dead || this.deathCam?.active) return;
+    this._beginDeath();
+  }
+
+  _beginDeath() {
+    const feet = this.movement.position;
+    const yaw = this.movement.yaw;
+    const eye = this.ctx.camera.position;
+    const fwd = this.rig.forward;
+
+    // Impulse along the last hit direction so the body reacts to the kill shot.
+    this._tmp2.copy(this._lastHitDir).multiplyScalar(3.2);
+    this._tmp2.y = Math.max(0.4, this._tmp2.y);
+
+    const ai = this.ctx.peek('ai');
+    let corpse = null;
+    if (typeof ai?.spawnPlayerCorpse === 'function') {
+      corpse = ai.spawnPlayerCorpse({
+        position: feet,
+        yaw,
+        impulse: this._tmp2,
+        point: this._lastHitPoint,
+      });
+    }
+
+    this.setControlEnabled(false);
+    this.adsAmount = 0;
+    this._adsExternal = false;
+
+    this.deathCam.begin({
+      position: feet,
+      eye,
+      forward: fwd,
+      killer: this._lastKiller,
+      killerName: this._lastKillerName,
+      cause: this._lastDamageCause,
+      corpse,
+    });
+
+    const p = this._deathPayload;
+    p.position.copy(feet);
+    p.killer = this._lastKiller;
+    p.killerName = this.deathCam.killerName;
+    p.cause = this._lastDamageCause;
+    p.respawnIn = this.deathCam.respawnIn;
+    this.ctx.events.emit('player:death', p);
   }
 
   _onBulletImpact(e) {
@@ -466,10 +602,11 @@ export class PlayerSystem {
     const h = this._hudState;
     const m = this.movement;
     const hp = this.health;
+    const dc = this.deathCam;
     h.health = hp.value;
     h.maxHealth = hp.max;
     h.regen = hp.regenerating;
-    h.dead = hp.dead;
+    h.dead = hp.dead || !!dc?.active;
     h.suppression = hp.suppression;
     // 0..1 against tactical sprint, which is the fastest the player can move —
     // `ui` uses this directly as the reticle-bloom weight.
@@ -479,7 +616,20 @@ export class PlayerSystem {
     h.ads = this.adsAmount > 0.5;
     h.airborne = !m.grounded;
     h.position = this.position;
+    h.deathActive = !!dc?.active;
+    h.killerName = dc?.active ? dc.killerName : '';
+    h.respawnIn = dc?.active ? dc.respawnIn : 0;
     return h;
+  }
+
+  get deathActive() {
+    return !!this.deathCam?.active;
+  }
+  get respawnIn() {
+    return this.deathCam?.active ? this.deathCam.respawnIn : 0;
+  }
+  get killerName() {
+    return this.deathCam?.active ? this.deathCam.killerName : '';
   }
 
   get position() {
@@ -605,7 +755,10 @@ export class PlayerSystem {
   }
 
   applyDamage(amount, from, opts) {
-    return this.health.damage(amount, from ?? null, { yaw: this.movement.yaw, ...opts });
+    if (opts?.type) this._lastDamageCause = opts.type;
+    const dealt = this.health.damage(amount, from ?? null, { yaw: this.movement.yaw, ...opts });
+    this._checkDeath();
+    return dealt;
   }
   heal(a) {
     this.health.heal(a);
@@ -654,17 +807,55 @@ export class PlayerSystem {
     this._prev.state = '';
   }
 
-  respawn(index = 0) {
-    const world = this.ctx.peek('world');
-    const sp = world?.spawn?.(index);
+  /**
+   * Clear death state, remove the corpse, and place the player on a spawn
+   * point. `index` is optional — omit it to advance through the spawn cycle.
+   */
+  respawn(index) {
+    const ai = this.ctx.peek('ai');
+    const corpse = this.deathCam?.corpse;
+    if (corpse && typeof ai?.removeCorpse === 'function') ai.removeCorpse(corpse);
+    else if (corpse?.dispose) {
+      const list = ai?.agents;
+      if (Array.isArray(list)) {
+        const i = list.indexOf(corpse);
+        if (i >= 0) list.splice(i, 1);
+      }
+      corpse.dispose();
+    }
+    this.deathCam?.end();
+
     this.health.reset(true);
-    if (!sp?.position) return;
-    const gy = this.physics.groundHeight(sp.position.x, sp.position.z, sp.position.y + 6);
-    const feetY = Number.isFinite(gy) ? gy + 0.03 : sp.position.y;
-    this.movement.yaw = sp.yaw ?? 0;
+    this.health.effect = 0;
+    this.health.hitFlash = 0;
+    this._lastKiller = null;
+    this._lastKillerName = null;
+    this._lastDamageCause = 'bullet';
+
+    const i = index !== undefined && index !== null ? index : this._nextSpawnIndex();
+    const spawn = this._resolveSpawn(i);
+    this._spawnIndex = spawn.index;
+    this.movement.yaw = spawn.yaw;
     this.movement.pitch = 0;
-    this.movement.teleport(sp.position.x, feetY, sp.position.z);
+    this.movement.velocity.set(0, 0, 0);
+    this.movement.teleport(spawn.feet.x, spawn.feet.y, spawn.feet.z);
+    this.movement.cancelMantle?.();
+    this.movement.sprinting = false;
+    this.movement.tacticalSprint = false;
+    this.movement.sliding = false;
     this.rig.reset(STANCE.stand.eye);
+    this.rig.update(1 / 60, this.movement, this.health);
+    this.rig.applyTo(this.ctx.camera);
+    this._syncHitbox();
+    this._lookFrame = -1;
+    this._prev.state = '';
+
+    this.setControlEnabled(true);
+
+    const p = this._respawnPayload;
+    p.position.copy(spawn.feet);
+    p.index = spawn.index;
+    this.ctx.events.emit('player:respawn', p);
   }
 
   /** Named states for dev overlays and future shots. */
@@ -709,8 +900,18 @@ export class PlayerSystem {
         this.health.hitFlash = 0.6;
         break;
       case 'reset':
-        this.health.reset(true);
-        this.health.effect = 0;
+        if (this.deathCam?.active) this.respawn(this._spawnIndex);
+        else {
+          this.health.reset(true);
+          this.health.effect = 0;
+        }
+        break;
+      case 'kill':
+        this._lastDamageCause = 'bullet';
+        this._lastKillerName = 'DEBUG';
+        this._lastKiller = null;
+        this.health.damage(this.health.max + 10, null, { type: 'bullet' });
+        this._checkDeath();
         break;
       default:
         break;

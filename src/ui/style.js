@@ -597,6 +597,60 @@ const CSS = `
   background: linear-gradient(to right, transparent, rgba(255,255,255,.5), transparent);
 }
 
+/* =========================================================== death screen */
+.ow-death {
+  position:absolute; inset:0;
+  pointer-events:none;
+  will-change: opacity;
+}
+.ow-death-scrim {
+  position:absolute; inset:0;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 48%, rgba(40,6,4,.28) 0%, rgba(4,6,8,.0) 70%),
+    linear-gradient(to bottom, rgba(4,6,8,.42) 0%, rgba(4,6,8,.18) 40%, rgba(4,6,8,.55) 100%);
+}
+.ow-death-panel {
+  position:absolute; left:50%; top:46%;
+  transform: translate(-50%,-50%);
+  text-align:center;
+  padding: calc(var(--u) * 5) calc(var(--u) * 28);
+  will-change: transform;
+}
+.ow-death-panel::before {
+  content:''; position:absolute; inset:0; z-index:-1;
+  background: linear-gradient(to bottom,
+    rgba(4,7,10,0) 0%, rgba(4,7,10,.62) 18%, rgba(4,7,10,.62) 82%, rgba(4,7,10,0) 100%);
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,0) 0%, #000 16%, #000 84%, rgba(0,0,0,0) 100%);
+          mask-image: linear-gradient(to right, rgba(0,0,0,0) 0%, #000 16%, #000 84%, rgba(0,0,0,0) 100%);
+}
+.ow-death-lbl {
+  font-size: calc(11px * var(--k)); letter-spacing:.36em; color: var(--ink-2);
+  text-shadow: var(--sh-o1);
+}
+.ow-death-name {
+  margin-top: calc(var(--u) * 1.8);
+  font-family: var(--fd);
+  font-size: calc(38px * var(--k)); font-weight:700; letter-spacing:.22em;
+  color: var(--red); text-shadow: var(--sh-o2);
+}
+.ow-death-rule {
+  margin: calc(var(--u) * 2.4) auto 0; width: calc(140px * var(--k)); height:1px;
+  background: linear-gradient(to right, transparent, rgba(255,80,60,.65), transparent);
+}
+.ow-death-sub {
+  margin-top: calc(var(--u) * 3);
+  font-size: calc(10.5px * var(--k)); letter-spacing:.32em; color: var(--ink-2);
+  text-shadow: var(--sh-o1);
+}
+.ow-death-timer {
+  margin-top: calc(var(--u) * 1.2);
+  font-family: var(--fd);
+  font-size: calc(52px * var(--k)); font-weight:700; letter-spacing:.08em;
+  color: var(--ink); text-shadow: var(--o2), 0 0 calc(18px * var(--k)) rgba(0,0,0,.55);
+  will-change: transform, color;
+}
+.ow-death-timer.tick { color: var(--amber); }
+
 /* ================================================================== menu */
 .ow-menu {
   position:absolute; inset:0; pointer-events:auto;

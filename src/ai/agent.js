@@ -89,7 +89,19 @@ const DEG = Math.PI / 180;
 
 let _nextId = 1;
 
+const CALLSIGNS = [
+  'RAVEN', 'GHOST', 'VIPER', 'REAPER', 'NOMADS', 'HUNTER', 'WRAITH', 'SHADE',
+  'FANG', 'BLADE', 'ROOK', 'CROW', 'STALKER', 'OUTLAW', 'SPECTRE', 'HAVOC',
+];
+
 export class Agent {
+  /** Stable callsign from id so the same soldier keeps a name across a match. */
+  static callsign(id, variant) {
+    const base = CALLSIGNS[(id - 1) % CALLSIGNS.length];
+    const tag = variant === 'irregular' ? 'IR' : variant === 'breacher' ? 'BR' : 'OP';
+    return `${base}-${tag}${((id - 1) % 9) + 1}`;
+  }
+
   constructor(ai, opts = {}) {
     this.ai = ai;
     this.ctx = ai.ctx;
@@ -180,6 +192,9 @@ export class Agent {
     this.stateTime = 0;
     this.squad = opts.squad ?? null;
     this.team = opts.team ?? 1;
+    /** Display name for killfeed / "Killed by" — assigned once at spawn. */
+    this.name = opts.name ?? Agent.callsign(this.id, this.variantName);
+    this.callsign = this.name;
 
     /* ---------------- perception ---------------- */
     this.eyeHeight = RIG.eyeHeight * this.scale;

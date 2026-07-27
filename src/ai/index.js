@@ -18,6 +18,9 @@
  *
  * PUBLIC API — `const ai = ctx.get('ai')`
  *   ai.spawn(variant, position, yaw, opts) -> Agent
+ *   ai.spawnPlayerCorpse({position,yaw,impulse,point}) -> Agent  (dead body for
+ *                                                    the local player's death cam)
+ *   ai.removeCorpse(agent)                 dispose a player corpse early
  *   ai.agents                              live Agent list
  *   ai.debugStage('firefight')             staged combat tableau for captures
  *   ai.prewarmMaterials()                  await: build + compile every character
@@ -472,6 +475,57 @@ export class AiSystem {
     const a = new Agent(this, { variant: variantName, position, yaw, ...opts });
     this.agents.push(a);
     return a;
+  }
+
+  /**
+   * Drop a third-person body for the local player's death cam. Builds a normal
+   * agent at the feet pose, then immediately hands it to the ragdoll solver with
+   * the kill-shot impulse so the body reads as the player collapsing.
+   *
+   * @param {object} opts
+   *   position  Vector3 feet
+   *   yaw       radians
+   *   impulse   Vector3 world impulse (optional)
+   *   point     Vector3 impact point (optional)
+   *   variant   soldier variant name (default: urban operator look)
+   */
+  spawnPlayerCorpse(opts = {}) {
+    const pos = opts.position ?? this._v.set(0, 0, 0);
+    const yaw = opts.yaw ?? 0;
+    const variant = opts.variant ?? 'breacher';
+    // Stand the body slightly clear of the floor so the ragdoll capsules do not
+    // start buried (same trick agent.die uses).
+    this._v2.set(pos.x, pos.y, pos.z);
+    const a = this.spawn(variant, this._v2, yaw, {
+      name: opts.name ?? 'YOU',
+      team: 0,
+      corpseOnly: true,
+    });
+    // One idle frame so the ragdoll inherits a standing pose, not a raw bind.
+    a.animator?.setState?.({ clip: 'idle', speed: 0, crouch: false, aimWeight: 0, suppress: 0 });
+    a.animator?.update?.(0.016, 0);
+    a.group.updateMatrixWorld(true);
+
+    const hit = opts.point
+      ? this._v3.copy(opts.point)
+      : this._v3.set(pos.x, pos.y + 1.2, pos.z);
+    if (opts.impulse && opts.impulse.lengthSq?.() > 1e-6) {
+      this._v.copy(opts.impulse).normalize();
+    } else {
+      this._v.set(-Math.sin(yaw), 0.15, -Math.cos(yaw));
+    }
+    const amount = opts.impulse?.length?.() ?? 40;
+    a.die(hit, this._v, Math.max(20, amount * 8));
+    a.isPlayerCorpse = true;
+    return a;
+  }
+
+  /** Tear down a corpse spawned by `spawnPlayerCorpse`. Safe on null. */
+  removeCorpse(agent) {
+    if (!agent) return;
+    const i = this.agents.indexOf(agent);
+    if (i >= 0) this.agents.splice(i, 1);
+    agent.dispose?.();
   }
 
   /**

@@ -11,6 +11,7 @@ import { Compass, MatchBar } from './compass.js';
 import { Minimap } from './minimap.js';
 import { WorldMarkers } from './markers.js';
 import { Prompt, Banner } from './prompts.js';
+import { DeathOverlay } from './death.js';
 import { PauseMenu } from './menu.js';
 import { CombatDemo } from './demo.js';
 
@@ -51,13 +52,14 @@ const MAX_BLIPS = 48;
  *                              reloadProgress, ads, spread, lethalCount,
  *                              tacticalCount }
  *   player.getHudState()  -> { health, maxHealth, armour, maxArmour, regen,
- *                              move, sprint, crouch, ads, airborne, position }
+ *                              move, sprint, crouch, ads, airborne, position,
+ *                              dead, deathActive, killerName, respawnIn }
  *                            (or plain `player.health` / `player.position`)
  *   ai.getHudActors()     -> [{ position, alive, friendly, heading }]
  *   audio.playUi(id, gain) | audio.play(id) — hit ticks, heartbeat, warnings
  *
  * Events consumed: weapon:fire, weapon:reload, damage:dealt, damage:taken,
- * actor:death, player:state, explosion, resize.
+ * actor:death, player:death, player:state, explosion, resize.
  * Events emitted:  ui:pause, ui:quality, ui:sensitivity, ui:fov, ui:setting.
  */
 export class UiSystem {
@@ -90,6 +92,7 @@ export class UiSystem {
     this.ammo = new AmmoPanel(this.chromeLayer);
     this.prompt = new Prompt(this.chromeLayer);
     this.banner = new Banner(this.chromeLayer);
+    this.death = new DeathOverlay(this.root);
     this.menu = new PauseMenu(this.root, ctx);
 
     this.health.onBeat = (i) => this.sfx('heartbeat', 0.35 + i * 0.5);
@@ -120,6 +123,10 @@ export class UiSystem {
       scoreThem: 0,
       timeLeft: 600,
       mode: 'TDM',
+      dead: false,
+      deathActive: false,
+      killerName: '',
+      respawnIn: 0,
       /** true when no player/weapons subsystem is driving us (stub-safe demo) */
       simulate: false,
       time: 0,
@@ -217,12 +224,23 @@ export class UiSystem {
     });
 
     on('actor:death', (e) => {
+      if (e?.actor?.isPlayerCorpse) return; // player body is not a combat kill
       if (ctx.time.elapsed - this._lastKillAt < 0.3) return; // already credited
       this.killfeed.push({
         attacker: e?.by?.name ?? 'ENEMY',
         victim: e?.actor?.name ?? 'OPERATOR',
         attackerFriendly: false,
       });
+    });
+
+    on('player:death', (e) => {
+      this.killfeed.push({
+        attacker: e?.killerName ?? e?.killer?.name ?? 'ENEMY',
+        victim: 'YOU',
+        attackerFriendly: false,
+      });
+      this.state.scoreThem = (this.state.scoreThem ?? 0) + 1;
+      this.sfx('player_hurt', 1);
     });
 
     on('explosion', (e) => {
@@ -448,8 +466,16 @@ export class UiSystem {
       if (ps.crouch !== undefined) s.crouch = !!ps.crouch;
       if (ps.ads !== undefined) s.ads = !!ps.ads;
       if (ps.airborne !== undefined) s.airborne = !!ps.airborne;
+      s.dead = !!ps.dead;
+      s.deathActive = !!ps.deathActive;
+      s.killerName = ps.killerName ?? '';
+      s.respawnIn = ps.respawnIn ?? 0;
     } else if (player && typeof player.health === 'number') {
       s.health = player.health;
+    } else {
+      s.deathActive = false;
+      s.killerName = '';
+      s.respawnIn = 0;
     }
 
     // ---- movement-derived reticle bloom (works with any player system) ----
@@ -497,7 +523,8 @@ export class UiSystem {
     const heading = (Math.atan2(fx, -fz) * 180) / Math.PI;
 
     // ---- widgets ---------------------------------------------------------
-    const hudGoal = this.hudTarget * (this.menu.open ? 0.15 : 1);
+    const deadHud = s.deathActive ? 0.12 : 1;
+    const hudGoal = this.hudTarget * (this.menu.open ? 0.15 : 1) * deadHud;
     this.hudVisible = damp(this.hudVisible, hudGoal, 10, rawDt);
     setStyle(this.chromeLayer, 'opacity', this.hudVisible.toFixed(3));
     setStyle(this.worldLayer, 'opacity', this.hudVisible.toFixed(3));
@@ -512,6 +539,7 @@ export class UiSystem {
     this.matchBar.update(s);
     this.prompt.update(dt);
     this.banner.update(dt);
+    this.death.update(rawDt, s);
 
     this._buildCompassObjectives(pos);
     this.compass.update(heading, this._compassObjs);
@@ -606,6 +634,7 @@ export class UiSystem {
     this.markers.dispose();
     this.prompt.dispose();
     this.banner.dispose();
+    this.death.dispose();
     this.menu.dispose();
     this.root.remove();
     removeStyles();

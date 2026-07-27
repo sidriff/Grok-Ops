@@ -289,6 +289,30 @@ export const HEALTH = {
   },
 };
 
+/**
+ * Death cam + respawn. On 0 HP the player drops a corpse, the camera lifts
+ * above the body and looks at the killer, then respawns after the delay.
+ */
+export const DEATH = {
+  /** Seconds from death to respawn. */
+  respawnDelay: 5,
+  /** How long the camera eases from the eye to the overhead orbit. */
+  camBlend: 0.85,
+  /** Height above the body centre. */
+  camHeight: 2.55,
+  /** Horizontal stand-off from the body (toward the killer). */
+  camPull: 1.35,
+  /** FOV while dead (wider = more of the kill scene). */
+  camFov: 72,
+  /** Soft follow on the overhead orbit (ragdoll thrash damping). */
+  bodySmooth: 8,
+  /**
+   * Killer look-at follow rate. Higher = stickier track as they strafe.
+   * Death cam re-samples the killer every frame; this only damps the aim.
+   */
+  lookSmooth: 14,
+};
+
 export const FOOTSTEP = {
   /** Foot is offset laterally from the capsule centre so FX/audio pan. */
   lateral: 0.13,

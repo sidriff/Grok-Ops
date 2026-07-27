@@ -597,7 +597,13 @@ export class WeaponSystem {
     if (this._sinceShot > 0.6) this._shotIndex = 0;
 
     // ---- gather state ----------------------------------------------------
-    const live = !input.frozen && input.enabled !== false && this.debugMode === null;
+    const playerDead = player?.dead === true || player?.deathActive === true;
+    const live =
+      !input.frozen &&
+      input.enabled !== false &&
+      this.debugMode === null &&
+      !playerDead &&
+      player?.controlEnabled !== false;
     st.ads = live ? input.ads || player?.adsRequested === true : this.debugMode === 'ads';
     st.sprint = live ? player?.sprinting === true && this._sinceShot > 0.3 : false;
     st.speed = player?.horizontalSpeed ?? player?.speed ?? 0;
@@ -605,6 +611,9 @@ export class WeaponSystem {
     st.airborne = player?.airborne === true;
     st.lowReady = player?.state === 'mantle' || player?.mantling === true;
     st.empty = s.mag === 0 && !s.chambered;
+
+    // Hide the first-person rig while the death cam is up (third-person body).
+    if (this.viewmodel?.anchor) this.viewmodel.anchor.visible = !playerDead;
 
     // ---- input -----------------------------------------------------------
     if (live) {

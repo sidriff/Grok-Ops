@@ -125,8 +125,8 @@ export class Health {
 
     if (this.value <= 0) {
       this.dead = true;
-      this.ctx.events.emit('player:death', { position: this.ctx.camera.position });
-      // (one allocation on death is fine — it happens once)
+      // `player` owns the death experience (corpse, cam, UI). It emits the
+      // richer `player:death` payload from `_beginDeath` after applying damage.
     }
     this._emitState(true);
     return dealt;
