@@ -14,3 +14,4 @@ demo/
 .tmp-demo/
 .tmp-rend/
 revcrops/
+tmp/
