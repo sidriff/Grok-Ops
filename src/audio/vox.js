@@ -148,7 +148,9 @@ export function bark(actx, bank, rng, o = {}) {
   const tract = o.tract ?? rng.range(0.94, 1.07);
   const f0 = (o.f0 ?? rng.range(96, 132)) * spec.f0;
   const level = o.level ?? 1;
-  const out = gain(actx, 0.2); // VOICE TRIM
+  // Shouts need to read over rifles. 0.2 was inaudible under combat + distance
+  // attenuation; 0.72 still sits under a close muzzle, not under a brick.
+  const out = gain(actx, 0.72);
 
   const total = spec.syl.reduce((s, x) => s + x.d + (x.g ?? 0), 0);
 

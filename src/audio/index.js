@@ -170,6 +170,8 @@ export class AudioSystem {
       this.ambience = new Ambience(actx, this.bank, this.mixer, this.field, this.rng.fork());
       this.ambience.start();
       this.mixer.setSpace(this._space, 0.001);
+      // Apply volume set before the graph existed (boot shell slider).
+      if (this._pendingMaster != null) this.mixer.setMasterVolume(this._pendingMaster);
 
       if (actx.state === 'suspended') await actx.resume();
       this.running = true;
@@ -488,23 +490,40 @@ export class AudioSystem {
   /** Enemy vocalisation. `kind` is semantic — see barkFor() in vox.js. */
   bark(kind, position, opts = {}) {
     if (!this.running) return false;
+    if (this.actx.state === 'suspended') return false;
     const now = this.actx.currentTime;
-    if (now - this._lastBarkTime < 0.42 && !opts.force) return false; // no mush
+    if (now - (this._lastBarkTime ?? -Infinity) < 0.42 && !opts.force) return false; // no mush
     this._lastBarkTime = now;
     const seed = (opts.voice ?? 0) | 0;
+    // Formant shouts die under full geometry occlusion (occ LP drops to ~420 Hz
+    // and the presence peak at 2.6 kHz vanishes). Cap occlusion so a man behind
+    // a crate still yells; true bunker LOS can stay a bit muffled.
     const o = {
       bark: barkFor(kind, this.rng),
       f0: 96 + ((seed * 37) % 41),
       tract: 0.95 + ((seed * 13) % 11) / 100,
-      level: opts.level ?? 1,
+      level: opts.level ?? 1.35,
       radio: opts.radio ?? false,
-      send: opts.send,
+      send: opts.send ?? 0.35,
+      // Milder distance falloff than gunshots: voices stay readable at 40 m.
+      gain: opts.gain ?? 1.55,
+      occlusion: opts.occlusion !== undefined ? opts.occlusion : 0.15,
+      maxDist: opts.maxDist ?? 90,
     };
-    if (position) return this._playAt('bark', position.x, position.y, position.z, o, 'voice', 0.85);
-    return this._playDry('bark', o, 'voice', 0.25);
+    let ok = false;
+    if (position && Number.isFinite(position.x + position.y + position.z)) {
+      ok = this._playAt('bark', position.x, position.y, position.z, o, 'voice', 0.92);
+    } else {
+      ok = this._playDry('bark', o, 'voice', 0.3);
+    }
+    if (ok) this.stats.barks = (this.stats.barks ?? 0) + 1;
+    return ok;
   }
 
-  setMasterVolume(v) { this.mixer?.setMasterVolume(v); }
+  setMasterVolume(v) {
+    this._pendingMaster = v;
+    this.mixer?.setMasterVolume(v);
+  }
   setBusVolume(bus, v) { this.mixer?.setBusVolume(bus, v); }
   setAmbienceIntensity(v) { if (this.ambience) this.ambience.intensity = clamp(v, 0, 3); }
   setOcclusionEnabled(v) { if (this.field) this.field.occlusionEnabled = !!v; }
@@ -529,8 +548,15 @@ export class AudioSystem {
     on('damage:dealt', (p) => this._onDamageDealt(p));
     on('damage:taken', (p) => this._onDamageTaken(p));
     on('actor:death', (p) => this._onDeath(p));
-    // Optional: emitted by `ai` if it wants scripted chatter.
-    on('ai:bark', (p) => this.bark(p?.kind ?? 'spot', p?.position, { voice: p?.voice ?? 0 }));
+    // Emitted by `ai` on real state edges (spot / flank / grenade / copy / …).
+    on('ai:bark', (p) =>
+      this.bark(p?.kind ?? 'spot', p?.position, {
+        voice: p?.voice ?? 0,
+        radio: !!p?.radio,
+        force: !!p?.force,
+        level: p?.level,
+      })
+    );
   }
 
   _onFire(p) {

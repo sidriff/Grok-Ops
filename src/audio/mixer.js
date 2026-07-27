@@ -210,7 +210,8 @@ export class Mixer {
     };
     apply('ambience', 1);
     apply('foley', 0.55);
-    apply('voice', 0.4);
+    // Voice used to duck 40% with every shot — contact callouts vanished mid-fight.
+    apply('voice', 0.12);
   }
 
   /**

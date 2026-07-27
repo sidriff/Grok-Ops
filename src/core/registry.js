@@ -85,10 +85,20 @@ export class Registry {
 /** Minimal typed event bus. Handlers are called synchronously. */
 export class EventBus {
   #map = new Map();
-  /** Reused dispatch buffer — emit() must not allocate. */
-  #dispatch = [];
+  /**
+   * Per-reentrancy-depth snapshot buffers. A single shared array is not safe:
+   * a handler that emit()s (e.g. damage:dealt → hitmarker → …) re-enters emit
+   * and used to overwrite the outer snapshot, leaving `null` for remaining
+   * outer handlers ("fn is not a function"). pool[0] covers the common path
+   * with zero alloc; deeper levels only appear under nested emit.
+   */
+  #pool = [[]];
+  #depth = 0;
 
   on(type, fn) {
+    if (typeof fn !== 'function') {
+      throw new TypeError(`EventBus.on("${type}"): handler must be a function`);
+    }
     (this.#map.get(type) ?? this.#map.set(type, new Set()).get(type)).add(fn);
     return () => this.off(type, fn);
   }
@@ -108,24 +118,33 @@ export class EventBus {
   emit(type, payload) {
     const set = this.#map.get(type);
     if (!set || set.size === 0) return;
-    // Snapshot into a reused array so handlers may unsubscribe mid-dispatch
-    // without allocating a fresh `[...set]` every weapon:fire / impact.
-    const buf = this.#dispatch;
+    const depth = this.#depth++;
+    let buf = this.#pool[depth];
+    if (!buf) {
+      buf = [];
+      this.#pool[depth] = buf;
+    }
     let n = 0;
     for (const fn of set) buf[n++] = fn;
-    for (let i = 0; i < n; i++) {
-      const fn = buf[i];
-      buf[i] = null;
-      try {
-        fn(payload);
-      } catch (err) {
-        console.error(`[events] handler for "${type}" threw:`, err);
+    try {
+      for (let i = 0; i < n; i++) {
+        const fn = buf[i];
+        buf[i] = null;
+        if (typeof fn !== 'function') continue;
+        try {
+          fn(payload);
+        } catch (err) {
+          console.error(`[events] handler for "${type}" threw:`, err);
+        }
       }
+    } finally {
+      this.#depth = depth;
     }
   }
 
   clear() {
     this.#map.clear();
-    this.#dispatch.length = 0;
+    for (const b of this.#pool) b.length = 0;
+    this.#depth = 0;
   }
 }

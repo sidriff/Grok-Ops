@@ -14,6 +14,10 @@
  * handing out permission to peek so they never all lean out at once, plus
  * suppressing fire, grenades and repositioning when the player stops moving.
  *
+ * VOICE — state edges emit `ai:bark` (spot / flank / grenade / reload / copy)
+ * into the formant synth in `audio/vox.js`. Alert always seeks last-known and
+ * turns the head/body toward it so hunting is visible, not just simulated.
+ *
  * DAMAGE is per-bone: capsule colliders for head, chest, pelvis, arms and legs
  * are pushed into `physics` every frame, so a headshot is a headshot because of
  * where the round landed, not because of a random roll. Death hands the live
@@ -230,6 +234,10 @@ export class Agent {
     this.peekTimer = this.rng.range(0.5, 2.5);
     this.grenadeCooldown = this.rng.range(9, 22);
     this.hasGrenade = true;
+    /** true after awareness first locks a target this engagement */
+    this._hadTarget = false;
+    /** repath cadence while hunting last-known */
+    this._searchRepath = 0;
 
     /* ---------------- navigation ---------------- */
     this.path = [];
@@ -289,6 +297,7 @@ export class Agent {
     this.peekTimer -= dt;
     this.repathTimer -= dt;
     this.vaultCooldown -= dt;
+    this._searchRepath -= dt;
     if (this.lastKnownAge < 1e6) this.lastKnownAge += dt;
 
     // a path the frame budget deferred: ask again before anything else does
@@ -297,8 +306,10 @@ export class Agent {
     this._sense(dt);
     this._think(dt);
     this._move(dt);
-    this._shoot(dt);
+    // Pose (and muzzle anchors) before the trigger pull: rounds sample
+    // animator.muzzleWorld / muzzleDir, which only refresh inside animator.update.
     this._drive(dt);
+    this._shoot(dt);
   }
 
   /* ================================================================== */
@@ -334,10 +345,18 @@ export class Agent {
       if (this.awareness >= 1) {
         this.hasTarget = true;
         this.target = player;
+        // First lock this engagement — the bark that says "they saw me".
+        if (!this._hadTarget) {
+          this._hadTarget = true;
+          this._bark('spot');
+        }
       }
     } else {
       this.awareness = Math.max(0, this.awareness - dt * 0.35);
-      if (this.hasTarget && this.lastKnownAge > 6.5) this.hasTarget = false;
+      if (this.hasTarget && this.lastKnownAge > 6.5) {
+        this.hasTarget = false;
+        this._hadTarget = false;
+      }
     }
   }
 
@@ -354,7 +373,13 @@ export class Agent {
     }
     // hearing alone never grants a target; it turns the head and the body
     this.awareness = Math.min(0.85, this.awareness + strength * 0.5);
-    if (this.state === STATE.IDLE || this.state === STATE.PATROL) this._setState(STATE.ALERT);
+    if (this.state === STATE.IDLE || this.state === STATE.PATROL) {
+      this._setState(STATE.ALERT);
+      // Drop the patrol path and move on the contact immediately.
+      this._seekLastKnown(true);
+    } else if (this.state === STATE.ALERT) {
+      this._seekLastKnown(false);
+    }
   }
 
   /** Rounds cracking past raise suppression, which drives the flinch + duck. */
@@ -370,9 +395,56 @@ export class Agent {
 
   _setState(s) {
     if (this.state === s) return;
+    const prev = this.state;
     this.state = s;
     this.stateTime = 0;
     if (s !== STATE.COMBAT && s !== STATE.SUPPRESSED) this.peeking = false;
+    // Entering alert from a quiet state: abandon patrol immediately.
+    if (s === STATE.ALERT && (prev === STATE.IDLE || prev === STATE.PATROL)) {
+      this.hasMoveTarget = false;
+      this.pathLen = 0;
+      this.pathIndex = 0;
+      this.pathPending = false;
+      this._searchRepath = 0;
+      // Heard something / took fire — shout before full visual lock so the
+      // player hears the brain wake up (spot alone only fires after awareness).
+      if (this.lastKnownAge < 2.5) this._bark('spot', { level: 1.15 });
+    }
+  }
+
+  /**
+   * Diegetic voice: routes through audio's formant barks via `ai:bark`.
+   * Rate-limited on the AI system so a squad does not mush into one yell.
+   */
+  _bark(kind, opts = {}) {
+    if (!this.alive || this.staged) return false;
+    return this.ai.emitBark?.(this, kind, opts) ?? false;
+  }
+
+  /**
+   * Path toward last-known (or a nearby search offset once we arrive).
+   * @param {boolean} force  ignore the repath timer (fresh contact / hear)
+   */
+  _seekLastKnown(force = false) {
+    if (this.lastKnownAge > 12) return false;
+    const dist = this.position.distanceTo(this.lastKnown);
+    // Close enough: hold briefly then pick a search offset so we keep moving.
+    if (dist < 1.5) {
+      if (!force && this._searchRepath > 0) return false;
+      const ang = this.rng.float() * Math.PI * 2;
+      const r = this.rng.range(3.5, 7.5);
+      this._v.set(
+        this.lastKnown.x + Math.cos(ang) * r,
+        this.lastKnown.y,
+        this.lastKnown.z + Math.sin(ang) * r
+      );
+      this._searchRepath = this.rng.range(1.4, 2.4);
+      return this._goTo(this._v);
+    }
+    if (!force && this._searchRepath > 0 && this.hasMoveTarget) return false;
+    if (!force && this.pathPending) return false;
+    this._searchRepath = this.rng.range(0.9, 1.6);
+    return this._goTo(this.lastKnown);
   }
 
   _think(dt) {
@@ -381,6 +453,7 @@ export class Agent {
       case STATE.IDLE:
         this.desiredSpeed = 0;
         this.crouch = false;
+        this.aimWeight = Math.max(0, this.aimWeight - dt * 0.8);
         if (this.hasTarget) this._enterCombat();
         else if (this.patrolPoints && this.stateTime > 2.5) this._setState(STATE.PATROL);
         break;
@@ -388,6 +461,7 @@ export class Agent {
       case STATE.PATROL: {
         this.crouch = false;
         this.desiredSpeed = 1.35;
+        this.aimWeight = Math.max(0.15, this.aimWeight - dt * 0.4);
         if (this.hasTarget) {
           this._enterCombat();
           break;
@@ -406,14 +480,23 @@ export class Agent {
       }
 
       case STATE.ALERT: {
+        // Hunt: high ready, face the contact, always path toward last-known.
+        // Standing still here is the "statue" bug — never leave desiredSpeed 0
+        // while the contact is still fresh unless we are mid-scan at the LKP.
         this.crouch = false;
-        this.desiredSpeed = 1.5;
         if (this.hasTarget) {
           this._enterCombat();
           break;
         }
-        // move to the last known position, then look around
-        if (this.lastKnownAge < 8 && !this.hasMoveTarget) this._goTo(this.lastKnown);
+        this.aimWeight = Math.min(0.85, this.aimWeight + dt * 2.2);
+        const hunting = this.lastKnownAge < 10;
+        if (hunting) {
+          const atLkp = this.position.distanceTo(this.lastKnown) < 1.5;
+          this.desiredSpeed = atLkp && !this.hasMoveTarget ? 0 : 2.35;
+          this._seekLastKnown(false);
+        } else {
+          this.desiredSpeed = 1.2;
+        }
         if (this.stateTime > 12) this._setState(this.patrolPoints ? STATE.PATROL : STATE.IDLE);
         break;
       }
@@ -427,6 +510,7 @@ export class Agent {
         this.desiredSpeed = 0;
         this.wantFire = false;
         this.peeking = false;
+        this.aimWeight = 0.4;
         if (this.suppression < 0.45) this._setState(STATE.COMBAT);
         break;
 
@@ -434,6 +518,7 @@ export class Agent {
         this.crouch = false;
         this.desiredSpeed = 4.4;
         this.wantFire = false;
+        this.aimWeight = 0.35;
         if (!this.hasMoveTarget || this.position.distanceTo(this.moveTarget) < 1.2 || this.stateTime > 7) {
           this._setState(STATE.COMBAT);
           this.cover = null;
@@ -446,6 +531,7 @@ export class Agent {
         this.crouch = false;
         this.desiredSpeed = 4.6;
         this.wantFire = false;
+        this.aimWeight = 0.3;
         if (!this.hasMoveTarget || this.position.distanceTo(this.moveTarget) < 1.2) {
           this._setState(STATE.COMBAT);
         }
@@ -575,6 +661,7 @@ export class Agent {
         this.ai.cover?.release(this.id);
         this._setState(STATE.FLANK);
         sq.claimFlank(this);
+        this._bark('flank');
         return;
       }
     }
@@ -670,10 +757,13 @@ export class Agent {
     this.speed += (targetSpeed - this.speed) * Math.min(1, dt * 7);
     if (this.speed < 0.05) this.speed = 0;
 
-    // facing: look where we are going, or at the threat when engaged
-    const engaged =
-      this.state === STATE.COMBAT || this.state === STATE.SUPPRESSED || this.hasTarget;
-    if (engaged && this.lastKnownAge < 8) {
+    // facing: hunt/alert/combat all orient on last-known; otherwise go where we walk
+    const hunting =
+      this.state === STATE.COMBAT ||
+      this.state === STATE.SUPPRESSED ||
+      this.state === STATE.ALERT ||
+      this.hasTarget;
+    if (hunting && this.lastKnownAge < 10) {
       this.targetYaw = Math.atan2(this.lastKnown.x - this.position.x, this.lastKnown.z - this.position.z);
     } else if (this.speed > 0.2) {
       this.targetYaw = Math.atan2(this._steer.x, this._steer.z);
@@ -747,8 +837,13 @@ export class Agent {
   /* ================================================================== */
 
   _shoot(dt) {
-    // where the gun is pointing: lead toward the target with human error
-    const t = this.hasTarget || this.lastKnownAge < 3 ? this.lastKnown : null;
+    // where the gun is pointing: lead toward the target with human error.
+    // Alert/search keeps the muzzle on last-known so the body language matches
+    // the head look-at (not "looking left, gun pointed down the street").
+    const t =
+      this.hasTarget || this.state === STATE.ALERT || this.lastKnownAge < 8
+        ? this.lastKnown
+        : null;
     if (t) {
       // aim at the chest, not the feet
       this._v.set(t.x, t.y + 0.05, t.z);
@@ -772,6 +867,7 @@ export class Agent {
     if (this.ammo <= 0) {
       this.animator.reload(this.variantName === 'irregular' ? 2.9 : 2.35);
       this.ai.emitReload(this);
+      this._bark('reload');
       this.ammo = this.magSize;
       return;
     }
@@ -804,6 +900,7 @@ export class Agent {
   _throwGrenade(target) {
     this.grenadeCooldown = this.rng.range(16, 34);
     this.hasGrenade = false;
+    this._bark('grenade', { force: true });
     const from = this._v.copy(this.animator.muzzleWorld);
     this.ai.throwGrenade(this, from, target);
   }
@@ -834,7 +931,10 @@ export class Agent {
         this.lastKnownAge = 0.4;
       }
     }
-    if (this.state === STATE.IDLE || this.state === STATE.PATROL) this._setState(STATE.ALERT);
+    if (this.state === STATE.IDLE || this.state === STATE.PATROL) {
+      this._setState(STATE.ALERT);
+      this._seekLastKnown(true);
+    }
 
     if (this.health <= 0) {
       this.die(point, dir, amount);
@@ -966,12 +1066,19 @@ export class Agent {
     this.clip = clip;
 
     const an = this.animator;
+    // Head/eyes lead the gun: hunt last-known while alert or recently contacted.
+    const lookContact =
+      this.hasTarget ||
+      this.state === STATE.ALERT ||
+      this.state === STATE.COMBAT ||
+      this.state === STATE.SUPPRESSED ||
+      this.lastKnownAge < 8;
     an.setState({
       clip,
       speed: this.speed,
       crouch: this.crouch,
       aimTarget: this.aimTarget,
-      lookTarget: this.hasTarget || this.lastKnownAge < 4 ? this.lastKnown : this.aimTarget,
+      lookTarget: lookContact ? this.lastKnown : this.aimTarget,
       aimWeight: this.aimWeight,
       suppress: Math.min(1, this.suppression * 0.8),
     });
@@ -984,8 +1091,13 @@ export class Agent {
     // clock — nothing skates or slides when the actor becomes visible again, and
     // the frame it does become visible is always a full evaluation because
     // lodIrrelevant is false by then.
+    //
+    // EXCEPTION: anyone about to fire. Off-frustum shooters still emit real
+    // tracers and deal damage; if we skip aim IK + muzzle re-sample, rounds
+    // leave a stale anchor (often empty air where they stood a few frames ago)
+    // and read as phantom shots from enemies that "aren't there".
     this._animAccum += dt;
-    if (this.lodIrrelevant) {
+    if (this.lodIrrelevant && !this.wantFire) {
       if (this._animSkip > 0) {
         this._animSkip--;
         return;

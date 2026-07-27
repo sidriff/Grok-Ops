@@ -37,7 +37,8 @@
  * EVENTS consumed: weapon:fire, bullet:impact, damage:dealt, explosion,
  *   player:footstep
  * EVENTS emitted: weapon:fire (enemy muzzle), weapon:shell, bullet:tracer,
- *   damage:dealt (enemy hitting the player), actor:death
+ *   damage:dealt (enemy hitting the player), actor:death,
+ *   ai:bark (spot / flank / grenade / reload / copy — formant VO)
  */
 
 import * as THREE from 'three';
@@ -84,7 +85,7 @@ export class AiSystem {
     /** dev: force the garrison to spawn even in deterministic capture runs */
     this.forcePopulate = false;
     this._navPending = true;
-    this.stats = { agents: 0, alive: 0, navMs: 0, coverPts: 0, walkable: 0 };
+    this.stats = { agents: 0, alive: 0, navMs: 0, coverPts: 0, walkable: 0, barks: 0, lastBark: null };
 
     /* scratch */
     this._v = new THREE.Vector3();
@@ -339,6 +340,12 @@ export class AiSystem {
     on('damage:dealt', (e) => {
       if (!e || !e.target || !(e.target instanceof Agent)) return;
       const a = e.target;
+      // Player-nade path applies blast damage first, then re-emits for killfeed
+      // / hitmarkers with `alreadyApplied` so we don't double-tap the corpse.
+      if (e.alreadyApplied) {
+        if (!a.alive && e.killed === undefined) e.killed = true;
+        return;
+      }
       if (!a.alive) return;
       const amount = e.amount * this._falloff(e.point);
       a.applyDamage(amount, e.headshot ? 'head' : e.part ?? 'torso', e.point ?? a.position, e.incident);
@@ -348,6 +355,7 @@ export class AiSystem {
     on('explosion', (e) => {
       if (!e || !e.position) return;
       const radius = e.radius ?? 5;
+      const playerSource = !!(e.source?.isPlayer || e.source === 'player');
       for (const a of this.agents) {
         if (!a.alive) continue;
         const d = a.position.distanceTo(e.position) + 0.001;
@@ -356,8 +364,26 @@ export class AiSystem {
         if (this.phys && !this.phys.lineOfSight(e.position, a.eye, this.phys.MASK.EXPLOSION)) continue;
         const f = 1 - d / radius;
         this._v.copy(a.position).sub(e.position).normalize();
-        a.suppress(1.4 * f);
-        a.applyDamage((e.damage ?? 100) * f * f, 'torso', a.eye, this._v);
+        // Flashes mostly stun; frags still delete people. Kind comes from the
+        // thrower when present (player nades); AI frags leave it unset.
+        const suppressMul = e.kind === 'tactical' ? 2.4 : 1.4;
+        const dmgMul = e.kind === 'tactical' ? 0.15 : 1;
+        a.suppress(suppressMul * f);
+        const amount = (e.damage ?? 100) * f * f * dmgMul;
+        const wasAlive = a.alive;
+        a.applyDamage(amount, 'torso', a.eye, this._v);
+        if (wasAlive && playerSource) {
+          this.ctx.events.emit('damage:dealt', {
+            target: a,
+            amount,
+            headshot: false,
+            killed: !a.alive,
+            point: a.eye,
+            from: e.position,
+            source: e.source,
+            alreadyApplied: true,
+          });
+        }
       }
     });
 
@@ -728,6 +754,44 @@ export class AiSystem {
     this.ctx.events.emit('weapon:reload', { weapon: 'ai_rifle', phase: 'start', actor: agent });
   }
 
+  /**
+   * Enemy vocalisation. Audio already listens for `ai:bark` and has a full
+   * formant bark bank (contact / flank / grenade / …) — this is the missing
+   * wire from agent state edges into that system.
+   *
+   * Rate limits: global mush guard (~0.55 s) plus a per-squad gap (~1.1 s) so
+   * three men do not stack into one unintelligible yell. `force` bypasses both
+   * (grenade call-outs).
+   */
+  emitBark(agent, kind, opts = {}) {
+    if (!agent?.alive || !this.ctx?.events) return false;
+    const now = this.ctx.time?.elapsed ?? performance.now() * 0.001;
+    if (!opts.force) {
+      if (now - (this._lastBarkT ?? -Infinity) < 0.55) return false;
+      const sq = agent.squad;
+      if (sq && now - (sq._lastBarkT ?? -Infinity) < 1.1) return false;
+    }
+    this._lastBarkT = now;
+    if (agent.squad) agent.squad._lastBarkT = now;
+    // Snapshot coords — agent.eye reuses a scratch Vector3 every frame.
+    const eye = agent.eye;
+    const position = eye
+      ? { x: eye.x, y: eye.y, z: eye.z }
+      : { x: agent.position.x, y: agent.position.y + 1.6, z: agent.position.z };
+    this.stats.barks = (this.stats.barks ?? 0) + 1;
+    this.stats.lastBark = kind;
+    this.ctx.events.emit('ai:bark', {
+      kind,
+      position,
+      voice: agent.id | 0,
+      radio: !!opts.radio,
+      force: !!opts.force,
+      level: opts.level,
+      agent,
+    });
+    return true;
+  }
+
   /** Grenade geometry + material. Built at prewarm, not on the first throw. */
   _ensureGrenade() {
     if (this._grenadeGeo) return;
@@ -967,8 +1031,9 @@ export class AiSystem {
       a.animator.reload(2.4);
     }
     a._move(dt);
-    a._shoot(dt);
+    // Same order as Agent.update: pose/muzzle before the trigger pull.
     a._drive(dt);
+    a._shoot(dt);
   }
 
   /**

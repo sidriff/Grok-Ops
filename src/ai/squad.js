@@ -6,6 +6,9 @@
  * instead of all leaning out together, shares contact reports so one man
  * spotting you alerts the rest (after a believable call-out delay), rations
  * grenades, and allows only one flanker at a time.
+ *
+ * On a fresh share, receivers drop patrol and seek the call-out; one of them
+ * radios a "copy" bark so the contact chain is audible, not only internal.
  */
 
 import * as THREE from 'three';
@@ -26,6 +29,10 @@ export class Squad {
     this.hasContact = false;
     this.contactAge = Infinity;
     this._pending = [];
+    /** wall-clock of last bark from anyone in this squad (rate limit) */
+    this._lastBarkT = -Infinity;
+    /** one "copy" radio ack per contact episode so the chain is audible once */
+    this._copyBarked = false;
   }
 
   add(agent) {
@@ -46,6 +53,8 @@ export class Squad {
     this.grenadeCooldown -= dt;
     this.contactAge += dt;
     if (this.flanker && (!this.flanker.alive || this.flanker.state !== 'flank')) this.flanker = null;
+    // Contact went cold: next share wave can radio again.
+    if (this.contactAge > 6) this._copyBarked = false;
 
     // contact sharing: whoever can see the player broadcasts, with a delay
     for (const m of this.members) {
@@ -58,6 +67,7 @@ export class Squad {
       }
     }
     if (this.hasContact && this.contactAge < 4) {
+      let copyAgent = null;
       for (const m of this.members) {
         if (!m.alive || m.hasTarget) continue;
         // a call-out only gives a direction to check, never a free kill
@@ -65,8 +75,18 @@ export class Squad {
           m.lastKnown.copy(this.contact);
           m.lastKnownAge = 0.9 + this.rng.float() * 0.8;
           m.alertness = 1;
-          if (m.state === 'idle' || m.state === 'patrol') m._setState('alert');
+          if (m.state === 'idle' || m.state === 'patrol' || m.state === 'alert') {
+            if (m.state !== 'alert') m._setState('alert');
+            // Leave the patrol route and hunt the call-out.
+            m._seekLastKnown?.(true);
+          }
+          if (!copyAgent) copyAgent = m;
         }
+      }
+      // One radio "copy" from a receiver — the spotter already yelled contact.
+      if (copyAgent && !this._copyBarked) {
+        this._copyBarked = true;
+        copyAgent._bark?.('copy', { radio: true });
       }
     }
 
