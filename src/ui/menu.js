@@ -161,7 +161,10 @@ export class PauseMenu {
     this.open = true;
     this.syncFromConfig();
     setStyle(this.root, 'display', '');
-    document.exitPointerLock?.();
+    setStyle(this.root, 'pointer-events', 'auto');
+    setStyle(this.root, 'cursor', 'default');
+    // Free the OS cursor and stop auto pointer-lock so buttons are clickable.
+    this.ctx.input?.releasePointerForUi?.();
     const t = this.ctx.time;
     if (t) {
       this._prevScale = t.scale;
@@ -177,7 +180,7 @@ export class PauseMenu {
     const t = this.ctx.time;
     if (t) t.scale = this._prevScale ?? 1;
     this.ctx.peek('player')?.setControlEnabled?.(true);
-    this.ctx.input?.requestPointerLock?.();
+    this.ctx.input?.capturePointerForGame?.({ lock: true });
     this.ctx.events.emit('ui:pause', { paused: false });
   }
 
@@ -195,6 +198,7 @@ export class PauseMenu {
   }
 
   dispose() {
+    if (this.open) this.ctx.input?.capturePointerForGame?.({ lock: false });
     this.root.remove();
   }
 }

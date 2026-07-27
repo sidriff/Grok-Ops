@@ -47,6 +47,11 @@ export class Input {
     this.enabled = true;
     /** Set true by capture mode so scripted shots aren't fought by real input. */
     this.frozen = false;
+    /**
+     * When false (pause / title menus), never auto-grab pointer lock and leave
+     * the system cursor free so DOM buttons remain clickable.
+     */
+    this.wantPointerLock = true;
 
     this.gamepadIndex = null;
     this.stick = { moveX: 0, moveY: 0, lookX: 0, lookY: 0 };
@@ -89,6 +94,7 @@ export class Input {
   }
 
   requestPointerLock() {
+    if (!this.wantPointerLock) return;
     // Chrome returns a promise that rejects if the document is not eligible
     // (headless capture, an iframe, a lock request too soon after an exit).
     // An unhandled rejection there shows up as a page error in the harness, so
@@ -99,6 +105,27 @@ export class Input {
     } catch {
       /* not eligible — keep running unlocked */
     }
+  }
+
+  /** Release lock and restore a normal OS cursor for DOM menus. */
+  releasePointerForUi() {
+    this.wantPointerLock = false;
+    try {
+      document.exitPointerLock?.();
+    } catch {
+      /* already free */
+    }
+    // #game is `cursor: none` for FPS aim; flip it while menus own the mouse.
+    if (this.canvas) this.canvas.style.cursor = 'default';
+    document.body.style.cursor = 'default';
+  }
+
+  /** Return to FPS aim: hide cursor, allow auto-lock, optionally re-lock. */
+  capturePointerForGame({ lock = true } = {}) {
+    this.wantPointerLock = true;
+    if (this.canvas) this.canvas.style.cursor = '';
+    document.body.style.cursor = '';
+    if (lock) this.requestPointerLock();
   }
 
   _onKeyDown(e) {
@@ -116,6 +143,8 @@ export class Input {
 
   _onMouseDown(e) {
     if (!this.enabled) return;
+    // Menus own the mouse — don't re-lock mid-click or swallow button presses.
+    if (!this.wantPointerLock) return;
     if (!this.pointerLocked && e.button === 0) this.requestPointerLock();
     this._pendingDown.add(`Mouse${e.button}`);
   }

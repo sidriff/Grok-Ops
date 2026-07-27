@@ -197,7 +197,7 @@ if (!skipMenu) {
   engine.input.enabled = true;
   player?.setControlEnabled?.(true);
   ui?.setHudVisible?.(true);
-  engine.input.requestPointerLock?.();
+  engine.input.capturePointerForGame({ lock: true });
 }
 
 window.__READY__ = true;
