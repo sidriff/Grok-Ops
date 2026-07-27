@@ -13,10 +13,11 @@
  * program count per frame — a jump in programs on the same frame as a hitch is
  * a shader compilation stall, the classic cause of Three.js hitching.
  *
- *   node tools/profile.mjs --port=8080 --dpr=2 --w=1512 --h=982
+ *   bun tools/profile.mjs --port=5173 --query=q=ultra --w=1920 --h=1080 --dpr=1
+ *   bun tools/profile.mjs --port=5173 --query=q=high --channel=chrome
  */
 import { chromium } from 'playwright';
-import { resolve } from 'node:path';
+import { platform } from 'node:os';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => {
   const m = a.match(/^--([^=]+)(?:=(.*))?$/); return m ? [m[1], m[2] ?? true] : [a, true];
@@ -27,13 +28,48 @@ const W = Number(args.w ?? 1512);
 const H = Number(args.h ?? 982);
 const DPR = Number(args.dpr ?? 2);
 const FRAMES = Number(args.frames ?? 900);
+// Prefer system Chrome when available so profiling hits the real GPU (5070 Ti
+// etc.) instead of Playwright's headless shell / software path.
+const CHANNEL = args.channel === true ? 'chrome' : args.channel || undefined;
+const HEADED = args.headed === true || args.headed === '1';
+// Prefer connectOverCDP when Playwright's launch pipe hangs (seen on some Win/GPU setups).
+// Start Chrome yourself, e.g.:
+//   chrome --remote-debugging-port=9222 --user-data-dir=tmp/chrome-profile-cdp
+const CDP = args.cdp === true ? 'http://127.0.0.1:9222' : args.cdp || null;
 
-const browser = await chromium.launch({
-  headless: true,
-  args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--mute-audio',
-         '--disable-frame-rate-limit', '--disable-gpu-vsync'],
-});
-const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: DPR });
+const angle =
+  args.angle ||
+  (platform() === 'darwin' ? 'metal' : platform() === 'win32' ? 'd3d11' : 'gl');
+
+const browser = CDP
+  ? await chromium.connectOverCDP(CDP)
+  : await chromium.launch({
+      headless: !HEADED,
+      channel: CHANNEL,
+      timeout: 60_000,
+      args: [
+        `--use-angle=${angle}`,
+        '--ignore-gpu-blocklist',
+        '--enable-gpu-rasterization',
+        '--enable-zero-copy',
+        '--mute-audio',
+        '--disable-frame-rate-limit',
+        '--disable-gpu-vsync',
+      ],
+    });
+
+// CDP reuses an existing browser context; launch creates a fresh one.
+const context = browser.contexts()[0] || (await browser.newContext({
+  viewport: { width: W, height: H },
+  deviceScaleFactor: DPR,
+}));
+const page = await context.newPage();
+if (!CDP) {
+  await page.setViewportSize({ width: W, height: H });
+} else {
+  // CDP pages inherit the host window; still try to size the page.
+  try { await page.setViewportSize({ width: W, height: H }); } catch { /* headed host may refuse */ }
+}
 const errs = [];
 page.on('pageerror', (e) => errs.push(e.message));
 
@@ -51,12 +87,23 @@ const bootMarks = await page.evaluate(() =>
 const internal = await page.evaluate(() => {
   const r = window.__ENGINE__.ctx.peek('render');
   const gl = r.renderer.getContext();
+  const gpu = window.__GPU__ || null;
   return {
     pixelRatio: r.renderer.getPixelRatio(),
     drawingBuffer: [gl.drawingBufferWidth, gl.drawingBufferHeight],
     megapixels: +((gl.drawingBufferWidth * gl.drawingBufferHeight) / 1e6).toFixed(2),
     quality: window.__ENGINE__.config.quality,
     renderScale: window.__ENGINE__.config.q.renderScale,
+    shadowMapSize: window.__ENGINE__.config.q.shadowMapSize,
+    gpu: gpu
+      ? {
+          renderer: gpu.renderer,
+          quality: gpu.quality,
+          score: gpu.score,
+          reason: gpu.reason,
+          dpr: gpu.dpr,
+        }
+      : null,
   };
 });
 
@@ -66,6 +113,24 @@ await page.evaluate(() => {
   e.input.enabled = true; e.input.frozen = false;
   e.ctx.peek('player')?.setControlEnabled?.(true);
   e.ctx.peek('ai')?.debugStage?.('firefight');
+
+  // Long-task observer: main-thread stalls >50ms are the "hang every second" smell.
+  window.__LONG_TASKS__ = [];
+  try {
+    const po = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        window.__LONG_TASKS__.push({
+          ms: +entry.duration.toFixed(1),
+          start: +entry.startTime.toFixed(1),
+          name: entry.name,
+        });
+      }
+    });
+    po.observe({ type: 'longtask', buffered: true });
+    window.__LONG_TASK_PO__ = po;
+  } catch {
+    /* Safari / old Chromium */
+  }
 });
 
 const result = await page.evaluate((FRAMES) => new Promise((done) => {
@@ -79,10 +144,8 @@ const result = await page.evaluate((FRAMES) => new Promise((done) => {
     const dt = now - last; last = now;
 
     // Drive gameplay: orbit the view, walk, and fire in bursts.
-    const t = i / 60;
     e.camera.rotation.y += 0.006;
-    const mv = e.ctx.peek('player');
-    if (mv) { try { e.input.down.add('KeyW'); } catch {} }
+    if (e.ctx.peek('player')) { try { e.input.down.add('KeyW'); } catch {} }
     if (i % 90 < 30) { e.input.down.add('Mouse0'); } else { e.input.down.delete('Mouse0'); }
 
     samples.push({
@@ -100,6 +163,16 @@ const result = await page.evaluate((FRAMES) => new Promise((done) => {
   };
   requestAnimationFrame(tick);
 }), FRAMES);
+
+const longTasks = await page.evaluate(() => {
+  const tasks = (window.__LONG_TASKS__ || []).slice();
+  try { window.__LONG_TASK_PO__?.disconnect(); } catch {}
+  return {
+    count: tasks.length,
+    totalMs: +tasks.reduce((a, t) => a + t.ms, 0).toFixed(1),
+    worst: tasks.sort((a, b) => b.ms - a.ms).slice(0, 12),
+  };
+});
 
 // Discard the first 60 frames: control handover and the first shadow-cascade fit
 // are one-time costs, not steady state.
@@ -127,6 +200,11 @@ const hitches = warm
 
 const first = warm[0], lastS = warm[warm.length - 1];
 console.log(JSON.stringify({
+  meta: {
+    port: PORT, w: W, h: H, dpr: DPR, frames: FRAMES, angle,
+    channel: CDP ? `cdp:${CDP}` : (CHANNEL || 'playwright-chromium'),
+    headed: HEADED, query: args.query || null,
+  },
   bootMs,
   bootMarks,
   internal,
@@ -136,6 +214,7 @@ console.log(JSON.stringify({
   hitchCount: hitches.length,
   hitchPctOfFrames: +((hitches.length / warm.length) * 100).toFixed(2),
   worstHitches: hitches.sort((a, b) => b.ms - a.ms).slice(0, 15),
+  longTasks,
   programs: { start: first.progs, end: lastS.progs, compiledDuringPlay: lastS.progs - first.progs },
   resources: { geosStart: first.geos, geosEnd: lastS.geos, texStart: first.texs, texEnd: lastS.texs },
   heapMb: { start: first.heap, end: lastS.heap, growth: lastS.heap - first.heap },
@@ -143,4 +222,10 @@ console.log(JSON.stringify({
   errors: errs.slice(0, 6),
 }, null, 2));
 
-await browser.close();
+// Never close a user-owned Chrome when attached over CDP — just drop the page.
+if (CDP) {
+  await page.close().catch(() => {});
+  await browser.close().catch(() => {}); // disconnects CDP, does not kill Chrome
+} else {
+  await browser.close();
+}
