@@ -70,16 +70,16 @@ const LEVEL_TZ = 1.34;
  */
 const LIGHT_SLOTS = 20;
 
-/** Spawn points in LEVEL space: [x, z, yaw, tag]. */
+/** Spawn points in LEVEL space: [x, z, yaw, tag]. Yaw 0 faces -Z (toward the gate). */
 const SPAWNS = [
-  [0.4, 22.5, Math.PI, 'north street'],
-  [-2.4, 30.0, Math.PI, 'north plaza'],
-  [3.6, 5.0, Math.PI, 'market'],
-  [-3.4, -12.0, 0, 'mid street'],
-  [2.6, -32.0, 0, 'south street'],
-  [-1.0, -39.0, 0, 'gate'],
-  [10.5, 4.6, -Math.PI / 2, 'east alley'],
-  [-9.0, -10.2, Math.PI / 2, 'west alley'],
+  [0.4, 22.5, 0, 'north street'],
+  [-2.4, 30.0, 0, 'north plaza'],
+  [3.6, 5.0, 0, 'market'],
+  [-3.4, -12.0, Math.PI, 'mid street'],
+  [2.6, -32.0, Math.PI, 'south street'],
+  [-1.0, -39.0, Math.PI, 'gate'],
+  [10.5, 4.6, Math.PI / 2, 'east alley'],
+  [-9.0, -10.2, -Math.PI / 2, 'west alley'],
 ];
 
 export class WorldSystem {
