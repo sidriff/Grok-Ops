@@ -18,8 +18,10 @@ const HEIGHT_RANGE = CAM_Y; // metres of vertical range mapped into the height r
  * After that one bake, per-frame cost is a single drawImage plus blips.
  *
  * Player arrow stays centred and rotates (map is north-up, matching the
- * compass strip); enemy blips are drawn from whatever the ai subsystem
- * publishes via `getHudActors()`.
+ * compass strip). Contacts come from the UI subsystem:
+ *   - live enemy / friend chevrons (clear LOS)
+ *   - fading last-known dots when LOS drops
+ *   - expanding rings at every `weapon:fire` origin
  */
 export class Minimap {
   constructor(parent, rng) {
@@ -435,8 +437,11 @@ export class Minimap {
   /* --------------------------------------------------------------- draw --- */
 
   /**
-   * @param {object} s { x, z, heading(deg), fov(deg), blips:[{x,z,kind,heading}],
-   *                     objectives:[{x,z,label}] }
+   * @param {object} s
+   *   x, z, heading(deg), fov(deg)
+   *   blips: [{x,z,kind:'enemy'|'friend'|'last',heading,alpha}]
+   *   pings: [{x,z,age,life}]
+   *   objectives: [{x,z,label}]
    */
   draw(s) {
     const g = this.g;
@@ -537,7 +542,36 @@ export class Minimap {
       }
     }
 
-    // blips
+    // shot-origin pings — expand + fade under the contact layer
+    const pings = s.pings;
+    if (pings) {
+      for (let i = 0; i < pings.length; i++) {
+        const p = pings[i];
+        const life = p.life || 1;
+        const t = clamp01((p.age ?? 0) / life);
+        if (t >= 1) continue;
+        const dx = (p.x - cx) * ppm + half;
+        const dy = (p.z - cz) * ppm + half;
+        const maxR = (8 + t * 22) * u;
+        if (dx < -maxR || dy < -maxR || dx > S + maxR || dy > S + maxR) continue;
+        const alpha = (1 - t) * (1 - t);
+        g.beginPath();
+        g.arc(dx, dy, maxR, 0, Math.PI * 2);
+        g.strokeStyle = `rgba(255,176,42,${(0.85 * alpha).toFixed(3)})`;
+        g.lineWidth = Math.max(1, (2.2 - t * 1.4) * u);
+        g.stroke();
+        // Hot core flash early in the ring life.
+        if (t < 0.45) {
+          const coreA = (1 - t / 0.45) * 0.9;
+          g.beginPath();
+          g.arc(dx, dy, (2.2 + t * 3) * u, 0, Math.PI * 2);
+          g.fillStyle = `rgba(255,200,90,${coreA.toFixed(3)})`;
+          g.fill();
+        }
+      }
+    }
+
+    // blips — live chevrons, fading last-known dots
     const blips = s.blips;
     if (blips) {
       for (let i = 0; i < blips.length; i++) {
@@ -545,9 +579,34 @@ export class Minimap {
         const dx = (b.x - cx) * ppm + half;
         const dy = (b.z - cz) * ppm + half;
         if (dx < -8 || dy < -8 || dx > S + 8 || dy > S + 8) continue;
+        const a = clamp01(b.alpha ?? 1);
+        if (a < 0.02) continue;
+
+        if (b.kind === 'last') {
+          // Soft red pip at the last place we saw them — no heading chevron.
+          const r = 3.1 * u;
+          g.save();
+          g.globalAlpha = a;
+          g.beginPath();
+          g.arc(dx, dy, r, 0, Math.PI * 2);
+          g.fillStyle = 'rgba(255,74,58,.72)';
+          g.shadowColor = 'rgba(255,50,30,.55)';
+          g.shadowBlur = 5 * u;
+          g.fill();
+          g.shadowBlur = 0;
+          g.beginPath();
+          g.arc(dx, dy, r + 2.2 * u, 0, Math.PI * 2);
+          g.strokeStyle = `rgba(255,120,90,${(0.55 * a).toFixed(3)})`;
+          g.lineWidth = 1.2 * u;
+          g.stroke();
+          g.restore();
+          continue;
+        }
+
         const enemy = b.kind !== 'friend';
         const r = 3.4 * u;
         g.save();
+        g.globalAlpha = a;
         g.translate(dx, dy);
         g.rotate(((b.heading ?? 0) * Math.PI) / 180);
         g.fillStyle = enemy ? 'rgba(255,74,58,.96)' : 'rgba(126,196,255,.95)';

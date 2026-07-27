@@ -16,6 +16,13 @@ import { PauseMenu } from './menu.js';
 import { CombatDemo } from './demo.js';
 
 const MAX_BLIPS = 48;
+const MAX_PINGS = 32;
+/** How long a lost contact stays as a fading last-known pip (seconds). */
+const CONTACT_FADE = 5.5;
+/** Beyond this, we never run LOS for minimap contacts (metres). */
+const CONTACT_RANGE = 58;
+/** Shot-origin radar ring lifetime (seconds). */
+const PING_LIFE = 1.35;
 
 /**
  * ===========================================================================
@@ -38,7 +45,7 @@ const MAX_BLIPS = 48;
  *   ui.banner.show(title, sub, life)    kill / objective confirmation
  *   ui.setPrompt({key,text,sub,progress}) / ui.clearPrompt()
  *   ui.setObjectives([{position,label,name}])
- *   ui.setBlips([{x,z,kind:'enemy'|'friend',heading}])
+ *   ui.setBlips([{x,z,kind:'enemy'|'friend'|'last',heading,alpha}])
  *   ui.spawnGrenade(worldPos, fuse)
  *   ui.setMatch({scoreUs,scoreThem,timeLeft,mode})
  *   ui.setHudVisible(bool)              hide everything (cinematics)
@@ -55,11 +62,13 @@ const MAX_BLIPS = 48;
  *                              move, sprint, crouch, ads, airborne, position,
  *                              dead, deathActive, killerName, respawnIn }
  *                            (or plain `player.health` / `player.position`)
- *   ai.getHudActors()     -> [{ position, alive, friendly, heading }]
+ *   ai.agents             -> Agent[] (LOS + last-known minimap contacts)
+ *   physics.lineOfSight   -> used to gate live enemy blips
  *   audio.playUi(id, gain) | audio.play(id) — hit ticks, heartbeat, warnings
  *
- * Events consumed: weapon:fire, weapon:reload, damage:dealt, damage:taken,
- * actor:death, player:death, player:state, explosion, resize.
+ * Events consumed: weapon:fire (also minimap shot pings), weapon:reload,
+ * damage:dealt, damage:taken, actor:death, player:death, player:state,
+ * explosion, resize.
  * Events emitted:  ui:pause, ui:quality, ui:sensitivity, ui:fov, ui:setting.
  */
 export class UiSystem {
@@ -150,9 +159,19 @@ export class UiSystem {
     this._objectives = [];
     this._compassObjs = [];
     this._blips = new Array(MAX_BLIPS);
-    for (let i = 0; i < MAX_BLIPS; i++) this._blips[i] = { x: 0, z: 0, kind: 'enemy', heading: 0 };
+    for (let i = 0; i < MAX_BLIPS; i++) {
+      this._blips[i] = { x: 0, z: 0, kind: 'enemy', heading: 0, alpha: 1 };
+    }
     this._blipCount = 0;
     this._blipView = [];
+    /** @type {Map<number, {x:number,z:number,heading:number,age:number,live:boolean,kind:string}>} */
+    this._contacts = new Map();
+    this._pings = new Array(MAX_PINGS);
+    for (let i = 0; i < MAX_PINGS; i++) this._pings[i] = { x: 0, z: 0, age: 0, life: 0 };
+    this._pingCount = 0;
+    this._pingView = [];
+    this._eye = new THREE.Vector3();
+    this._tgtEye = new THREE.Vector3();
 
     this.demo = null;
 
@@ -161,6 +180,9 @@ export class UiSystem {
 
     on('weapon:fire', (e) => {
       this.crosshair.onFire(e?.recoil ?? 1);
+      // Any muzzle — yours or theirs — pings the minimap at the origin.
+      const o = e?.origin;
+      if (o && Number.isFinite(o.x) && Number.isFinite(o.z)) this._pushPing(o.x, o.z);
       if (this.state.simulate) return;
       const w = this._weaponState();
       if (!w) this.state.ammo = Math.max(0, this.state.ammo - 1);
@@ -361,8 +383,34 @@ export class UiSystem {
       dst.z = src.z ?? src.position?.z ?? 0;
       dst.kind = src.kind ?? (src.friendly ? 'friend' : 'enemy');
       dst.heading = src.heading ?? 0;
+      dst.alpha = src.alpha ?? 1;
     }
     this._blipCount = n;
+  }
+
+  /** Radar ring at a world XZ (shot origin, scripted pulse, etc.). */
+  _pushPing(x, z, life = PING_LIFE) {
+    let slot;
+    if (this._pingCount < MAX_PINGS) {
+      slot = this._pingCount++;
+    } else {
+      // Pool full — overwrite the oldest ring.
+      let best = 0;
+      let bestAge = -1;
+      for (let i = 0; i < MAX_PINGS; i++) {
+        const p = this._pings[i];
+        if (p.age > bestAge) {
+          bestAge = p.age;
+          best = i;
+        }
+      }
+      slot = best;
+    }
+    const p = this._pings[slot];
+    p.x = x;
+    p.z = z;
+    p.age = 0;
+    p.life = life;
   }
 
   spawnGrenade(worldPos, fuse = 2.4) {
@@ -505,9 +553,6 @@ export class UiSystem {
     // ---- demo timeline ---------------------------------------------------
     if (this.demo?.active) this.demo.update(this, dt);
 
-    // ---- ai blips --------------------------------------------------------
-    this._collectBlips();
-
     // ---- camera basis ----------------------------------------------------
     const m = ctx.camera.matrixWorld.elements;
     let rx = m[0];
@@ -521,6 +566,9 @@ export class UiSystem {
     fx /= fl;
     fz /= fl;
     const heading = (Math.atan2(fx, -fz) * 180) / Math.PI;
+
+    // ---- ai blips + shot pings (needs camera forward / eye) --------------
+    this._collectBlips(dt, pos, fx, fz, ctx.camera);
 
     // ---- widgets ---------------------------------------------------------
     const deadHud = s.deathActive ? 0.12 : 1;
@@ -554,12 +602,26 @@ export class UiSystem {
     }
     this._blipView.length = this._blipCount;
     for (let i = 0; i < this._blipCount; i++) this._blipView[i] = this._blips[i];
-    this._mmState = this._mmState ?? { x: 0, z: 0, heading: 0, fov: 80, blips: null, objectives: null };
+    this._pingView.length = 0;
+    for (let i = 0; i < this._pingCount; i++) {
+      const p = this._pings[i];
+      if (p.life > 0) this._pingView.push(p);
+    }
+    this._mmState = this._mmState ?? {
+      x: 0,
+      z: 0,
+      heading: 0,
+      fov: 80,
+      blips: null,
+      pings: null,
+      objectives: null,
+    };
     this._mmState.x = pos.x;
     this._mmState.z = pos.z;
     this._mmState.heading = heading;
     this._mmState.fov = ctx.camera.fov;
     this._mmState.blips = this._blipView;
+    this._mmState.pings = this._pingView;
     this._mmState.objectives = this._mmObjs ?? (this._mmObjs = []);
     this._mmObjs.length = 0;
     for (const o of this._objectives) {
@@ -573,21 +635,131 @@ export class UiSystem {
     this.minimap.draw(this._mmState);
   }
 
-  _collectBlips() {
+  /**
+   * Live contacts: enemies (and friendlies) the player has clear LOS to.
+   * Lost LOS freezes the pip at the last known XZ and fades it out.
+   * Shot pings age here so the minimap can draw expanding rings.
+   */
+  _collectBlips(dt, playerPos, fx, fz, camera) {
+    // ---- age / compact shot pings ----------------------------------------
+    let write = 0;
+    for (let i = 0; i < this._pingCount; i++) {
+      const p = this._pings[i];
+      p.age += dt;
+      if (p.age < p.life) {
+        if (write !== i) {
+          const d = this._pings[write];
+          d.x = p.x;
+          d.z = p.z;
+          d.age = p.age;
+          d.life = p.life;
+        }
+        write++;
+      }
+    }
+    this._pingCount = write;
+
     if (this.demo?.active) return; // demo drives its own contacts
+
     const ai = this.ctx.peek('ai');
-    const list = typeof ai?.getHudActors === 'function' ? ai.getHudActors() : ai?.actors ?? null;
-    if (!Array.isArray(list)) return;
+    const agents = ai?.agents;
+    const phys = this.ctx.peek('physics');
+    const contacts = this._contacts;
+
+    // Mark every stored contact as not refreshed this frame.
+    for (const c of contacts.values()) c.live = false;
+
+    if (Array.isArray(agents) && agents.length) {
+      const eye = this._eye;
+      if (camera?.position) eye.copy(camera.position);
+      else eye.set(playerPos.x, (playerPos.y ?? 0) + 1.6, playerPos.z);
+
+      // Slightly wider than the optical half-FOV so edge-of-screen contacts count.
+      const halfFov = (((camera?.fov ?? 80) * 0.55) * Math.PI) / 180;
+      const cosHalf = Math.cos(halfFov);
+      const range = CONTACT_RANGE;
+      const rangeSq = range * range;
+      const mask = phys?.MASK?.SIGHT;
+
+      for (let i = 0; i < agents.length; i++) {
+        const a = agents[i];
+        if (!a || a.isPlayerCorpse) continue;
+        if (a.alive === false) {
+          // Dead: leave any existing last-known to fade, don't refresh.
+          continue;
+        }
+
+        const p = a.position;
+        if (!p) continue;
+        const friendly = a.friendly === true || a.team === 0;
+        const heading = a.heading ?? (a.yaw !== undefined ? (a.yaw * 180) / Math.PI : 0);
+
+        // Friendlies always plot; enemies need range + facing + clear LOS.
+        let spotted = friendly;
+        if (!friendly) {
+          const dx = p.x - eye.x;
+          const dz = p.z - eye.z;
+          const distSq = dx * dx + dz * dz;
+          if (distSq > rangeSq) continue;
+
+          const dist = Math.sqrt(distSq) || 1e-4;
+          const inv = 1 / dist;
+          // Horizontal facing into the camera look cone.
+          const facing = fx * dx * inv + fz * dz * inv;
+          if (facing < cosHalf) {
+            // Still age an existing contact if we had one.
+            continue;
+          }
+
+          // Chest/eye probe — standing eye height if the agent has no eye getter.
+          if (a.eye && Number.isFinite(a.eye.x)) this._tgtEye.copy(a.eye);
+          else this._tgtEye.set(p.x, p.y + (a.eyeHeight ?? 1.6), p.z);
+
+          const clear = phys?.lineOfSight
+            ? phys.lineOfSight(eye, this._tgtEye, mask)
+            : true;
+          spotted = clear;
+        }
+
+        if (!spotted) continue;
+
+        let c = contacts.get(a.id);
+        if (!c) {
+          c = { x: 0, z: 0, heading: 0, age: 0, live: true, kind: 'enemy' };
+          contacts.set(a.id, c);
+        }
+        c.x = p.x;
+        c.z = p.z;
+        c.heading = heading;
+        c.age = 0;
+        c.live = true;
+        c.kind = friendly ? 'friend' : 'enemy';
+      }
+    }
+
+    // Age lost contacts; drop fully faded ones.
+    for (const [id, c] of contacts) {
+      if (!c.live) c.age += dt;
+      if (c.age >= CONTACT_FADE) contacts.delete(id);
+    }
+
+    // Flatten into the blip pool for the minimap.
     let n = 0;
-    for (let i = 0; i < list.length && n < MAX_BLIPS; i++) {
-      const a = list[i];
-      const p = a?.position ?? a?.pos;
-      if (!p || a.alive === false || a.dead === true) continue;
+    for (const c of contacts.values()) {
+      if (n >= MAX_BLIPS) break;
       const b = this._blips[n++];
-      b.x = p.x;
-      b.z = p.z;
-      b.kind = a.friendly ? 'friend' : 'enemy';
-      b.heading = a.heading ?? (a.yaw !== undefined ? (a.yaw * 180) / Math.PI : 0);
+      b.x = c.x;
+      b.z = c.z;
+      b.heading = c.heading;
+      if (c.live) {
+        b.kind = c.kind;
+        b.alpha = 1;
+      } else {
+        // Fading last-known pip — no chevron heading.
+        b.kind = 'last';
+        b.alpha = clamp01(1 - c.age / CONTACT_FADE);
+        b.heading = 0;
+      }
     }
     this._blipCount = n;
   }
