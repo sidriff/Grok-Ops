@@ -220,19 +220,12 @@ export class RenderSystem {
     // far cheaper than any spatial substitute at the same quality.
     this._viewSamples = this.qLevel >= 2 ? 4 : this.qLevel >= 1 ? 2 : 0;
 
-    // Prepass writes depth/normal/velocity for soft particles, GTAO, contact,
-    // SSR, TAA, motion blur and DOF. On low those features are all off, and the
-    // extra full-scene walk is a major young-gen allocator (measured: ~30% of
-    // GC climb). Soft particles degrade to hard edges when depth is null.
-    this.needsPrepass = !!(
-      this.gtao ||
-      this.contact ||
-      this.ssr ||
-      this.taa ||
-      this.motionBlur ||
-      this.dof ||
-      q.forcePrepass
-    );
+    // Always on. Soft particles / GTAO / SSR / TAA / DOF need it, AND so does
+    // the sky fog composite: analytic haze treats depth<=0 as "sky" and then
+    // applies a full-column in-scatter (cream void over the whole street).
+    // Skipping prepass on low looked free until it painted the map white and
+    // the fog pass kept thrashing. Do not gate this on quality features.
+    this.needsPrepass = true;
 
     this.hdrRt = null;
     this.viewRt = null;
@@ -1252,13 +1245,6 @@ export class RenderSystem {
 
   _cullLights(camPos) {
     const s = this.settings;
-    const maxPts = this.q?.maxPointLights ?? 20;
-    // Scratch ranking of point lights that pass the distance fade. Cap the
-    // visible count so forward+shadow light setup stays small on low quality —
-    // each extra point light multiplies per-draw uniform work and young-gen GC.
-    let nRank = 0;
-    const rank = this._lightRank ?? (this._lightRank = new Array(64));
-
     for (let i = 0; i < this.lights.length; i++) {
       const e = this.lights[i];
       // If the owner animated the intensity since we last wrote it, adopt the
@@ -1273,38 +1259,15 @@ export class RenderSystem {
       // that asked to be distance-culled inside a room-or-street radius; the FX
       // flash pool deliberately registers at 90 m so the fade never bites it,
       // and a muzzle flash must not be dimmed by a room-lighting control.
+      //
+      // Do NOT hard-cap count here: flipping visible on/off past a budget
+      // changes Three's numPointLights every few frames and recompiles every
+      // lit material (main-thread lockup). Ballast + maxPointLights keep the
+      // permutation stable; distance fade is the only per-frame visibility.
       const gain = e.range <= PRACTICAL_RANGE ? s.practicalGain : 1;
       e.applied = e.baseIntensity * fade * gain;
       e.light.intensity = e.applied;
-      const inRange = fade > 0.002;
-      e.light.visible = inRange;
-      // Rank only world practicals (short range). FX flash pool uses range 90
-      // and must always stay in the light list when active.
-      if (inRange && e.light.isPointLight === true && e.range <= PRACTICAL_RANGE) {
-        e._cullDist = d;
-        if (nRank < rank.length) rank[nRank++] = e;
-      }
-    }
-
-    if (nRank > maxPts) {
-      // Keep the nearest practicals; hide the rest. Insertion selection is fine
-      // for N ≤ ~40 and allocates nothing.
-      for (let a = 0; a < maxPts; a++) {
-        let best = a;
-        for (let b = a + 1; b < nRank; b++) {
-          if (rank[b]._cullDist < rank[best]._cullDist) best = b;
-        }
-        if (best !== a) {
-          const t = rank[a];
-          rank[a] = rank[best];
-          rank[best] = t;
-        }
-      }
-      for (let i = maxPts; i < nRank; i++) {
-        rank[i].light.visible = false;
-        rank[i].light.intensity = 0;
-        rank[i].applied = 0;
-      }
+      e.light.visible = fade > 0.002;
     }
   }
 
