@@ -299,11 +299,11 @@ export const DEATH = {
   /** How long the camera eases from the eye to the overhead orbit. */
   camBlend: 0.85,
   /** Height above the body centre. */
-  camHeight: 2.55,
+  camHeight: 2.15,
   /** Horizontal stand-off from the body (toward the killer). */
-  camPull: 1.35,
-  /** FOV while dead (wider = more of the kill scene). */
-  camFov: 72,
+  camPull: 0.95,
+  /** FOV while dead — tighter than hip FOV so the kill scene fills the frame. */
+  camFov: 54,
   /** Soft follow on the overhead orbit (ragdoll thrash damping). */
   bodySmooth: 8,
   /**
@@ -311,6 +311,22 @@ export const DEATH = {
    * Death cam re-samples the killer every frame; this only damps the aim.
    */
   lookSmooth: 14,
+
+  /**
+   * Respawn safety: never drop the player where a living enemy can already see
+   * them. Each spawn is scored; visible/close points are rejected first.
+   */
+  /** Hard reject: any alive enemy closer than this (metres, horizontal). */
+  spawnMinEnemyDist: 14,
+  /** Beyond this range we ignore enemies for the "in view" test. */
+  spawnViewRange: 48,
+  /**
+   * Half-angle of an enemy's "looking at the spawn" cone (radians).
+   * ~50° matches the AI's ~100° perception FOV.
+   */
+  spawnViewHalfAngle: (50 * Math.PI) / 180,
+  /** Soft bonus: prefer spawns farther from the death position. */
+  spawnDeathBias: 0.04,
 };
 
 export const FOOTSTEP = {

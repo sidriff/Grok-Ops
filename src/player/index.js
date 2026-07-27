@@ -156,6 +156,9 @@ export class PlayerSystem {
 
     this._tmp = new THREE.Vector3();
     this._tmp2 = new THREE.Vector3();
+    this._spawnEye = new THREE.Vector3();
+    this._enemyEye = new THREE.Vector3();
+    this._toSpawn = new THREE.Vector3();
     /** Last emitted discrete state, compared field-wise so no string is built. */
     this._prev = {
       state: '', stance: '', sprinting: false, tacticalSprint: false,
@@ -241,14 +244,128 @@ export class PlayerSystem {
     return out;
   }
 
-  /** Next spawn index: advance at least one slot so you do not pop back on the corpse. */
-  _nextSpawnIndex() {
+  /**
+   * Pick a spawn that living enemies cannot already see. Prefer points that
+   * are clear of LOS/facing cones, outside the hard proximity ring, and away
+   * from the death position. Falls back to the least-bad option if every
+   * point is contested (small maps / full surround).
+   *
+   * @param {number|null|undefined} forced   force this index (debug / harness)
+   * @param {THREE.Vector3|null}    deathPos bias away from the kill site
+   */
+  _pickSpawn(forced, deathPos = null) {
     const world = this.ctx.peek('world');
-    const n = world?.spawnPoints?.length ?? 0;
-    if (n <= 1) return 0;
-    const step = 1 + this.rng.int(0, Math.max(0, n - 2));
-    this._spawnIndex = (this._spawnIndex + step) % n;
-    return this._spawnIndex;
+    const points = world?.spawnPoints;
+    const n = points?.length ?? 0;
+    if (n <= 0) return this._resolveSpawn(0);
+    if (forced !== undefined && forced !== null) return this._resolveSpawn(forced);
+
+    let bestI = (this._spawnIndex + 1) % n;
+    let bestScore = -Infinity;
+    const death = deathPos ?? this.deathCam?.body ?? this.movement?.position ?? null;
+
+    for (let i = 0; i < n; i++) {
+      const spawn = this._resolveSpawn(i);
+      const score = this._scoreSpawn(spawn, death);
+      // Tiny rng jitter so two equal candidates do not always pick the same.
+      const jitter = this.rng.float() * 0.15;
+      if (score + jitter > bestScore) {
+        bestScore = score + jitter;
+        bestI = i;
+      }
+    }
+    this._spawnIndex = bestI;
+    return this._resolveSpawn(bestI);
+  }
+
+  /**
+   * Higher is safer. Visible to any living enemy → large penalty. Close to any
+   * enemy → hard penalty. Distance from death is a soft preference.
+   */
+  _scoreSpawn(spawn, deathPos) {
+    const D = DEATH;
+    const eyeH = STANCE.stand.eye;
+    this._spawnEye.set(spawn.feet.x, spawn.feet.y + eyeH, spawn.feet.z);
+
+    let score = 0;
+    let visibleHits = 0;
+    let tooClose = 0;
+    let nearest = Infinity;
+
+    const ai = this.ctx.peek('ai');
+    const agents = ai?.agents;
+    if (agents?.length) {
+      const cosHalf = Math.cos(D.spawnViewHalfAngle);
+      const viewR = D.spawnViewRange;
+      const minD = D.spawnMinEnemyDist;
+      const phys = this.physics;
+      const mask = phys?.MASK?.SIGHT;
+
+      for (let i = 0; i < agents.length; i++) {
+        const a = agents[i];
+        if (!a || a.alive === false || a.isPlayerCorpse) continue;
+
+        // Enemy eye: live eye getter, else feet + eye height.
+        if (a.eye && Number.isFinite(a.eye.x)) this._enemyEye.copy(a.eye);
+        else if (a.position) {
+          this._enemyEye.copy(a.position);
+          this._enemyEye.y += a.eyeHeight ?? eyeH;
+        } else continue;
+
+        const dx = this._spawnEye.x - this._enemyEye.x;
+        const dy = this._spawnEye.y - this._enemyEye.y;
+        const dz = this._spawnEye.z - this._enemyEye.z;
+        const dist = Math.hypot(dx, dy, dz);
+        if (dist < nearest) nearest = dist;
+
+        if (dist < minD) {
+          tooClose++;
+          score -= (minD - dist) * 8;
+          continue;
+        }
+        if (dist > viewR) continue;
+
+        // Facing cone: only "in view" if they are roughly looking this way.
+        const inv = 1 / (dist || 1e-4);
+        this._toSpawn.set(dx * inv, dy * inv, dz * inv);
+        let fx; let fz;
+        if (a.yaw !== undefined) {
+          // AI forward is (-sin yaw, 0, -cos yaw) — same basis as player.
+          fx = -Math.sin(a.yaw);
+          fz = -Math.cos(a.yaw);
+        } else {
+          fx = this._toSpawn.x;
+          fz = this._toSpawn.z;
+        }
+        // Horizontal facing only — pitch is loose for spawn safety.
+        const fl = Math.hypot(fx, fz) || 1;
+        const facing = (fx / fl) * this._toSpawn.x + (fz / fl) * this._toSpawn.z;
+        if (facing < cosHalf) continue;
+
+        // Clear world LOS from their eye to the spawn eye → they can see us.
+        const clear = phys?.lineOfSight
+          ? phys.lineOfSight(this._enemyEye, this._spawnEye, mask)
+          : true;
+        if (clear) {
+          visibleHits++;
+          // Closer visible enemies are much worse.
+          score -= 120 + (viewR - dist) * 2.5;
+        }
+      }
+    }
+
+    // Hard reject tier: anything with visibility or proximity loses to clear points.
+    if (visibleHits > 0) score -= 500 * visibleHits;
+    if (tooClose > 0) score -= 200 * tooClose;
+
+    // Prefer farther from nearest enemy and from the death body.
+    if (Number.isFinite(nearest)) score += Math.min(nearest, 80) * 0.35;
+    if (deathPos) {
+      const ddx = spawn.feet.x - deathPos.x;
+      const ddz = spawn.feet.z - deathPos.z;
+      score += Math.hypot(ddx, ddz) * D.spawnDeathBias;
+    }
+    return score;
   }
 
   /* ==================================================================== */
@@ -809,11 +926,17 @@ export class PlayerSystem {
 
   /**
    * Clear death state, remove the corpse, and place the player on a spawn
-   * point. `index` is optional — omit it to advance through the spawn cycle.
+   * point. With no `index`, picks the safest point enemies cannot already see.
+   * An explicit index (debug / harness) still forces that slot.
    */
   respawn(index) {
     const ai = this.ctx.peek('ai');
     const corpse = this.deathCam?.corpse;
+    // Snapshot kill site before teardown — bias spawn selection away from it.
+    if (this.deathCam?.body) this._tmp2.copy(this.deathCam.body);
+    else if (this.movement?.position) this._tmp2.copy(this.movement.position);
+    else this._tmp2.set(0, 0, 0);
+
     if (corpse && typeof ai?.removeCorpse === 'function') ai.removeCorpse(corpse);
     else if (corpse?.dispose) {
       const list = ai?.agents;
@@ -832,8 +955,8 @@ export class PlayerSystem {
     this._lastKillerName = null;
     this._lastDamageCause = 'bullet';
 
-    const i = index !== undefined && index !== null ? index : this._nextSpawnIndex();
-    const spawn = this._resolveSpawn(i);
+    // Safe pick before control returns — skip any point living enemies can see.
+    const spawn = this._pickSpawn(index, this._tmp2);
     this._spawnIndex = spawn.index;
     this.movement.yaw = spawn.yaw;
     this.movement.pitch = 0;
