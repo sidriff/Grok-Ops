@@ -164,19 +164,29 @@ export function installShotApi(engine, { capture, lockstep = false } = {}) {
       })(engine.step);
   }
 
-  window.__RENDER_INFO__ = null;
+  // Reused bag — never allocate a fresh object per rAF tick (capture harness
+  // used to create one every frame, which showed up as young-gen thrash in GC
+  // profiles of any ?capture=1 session).
+  const renderInfo = {
+    frame: 0,
+    calls: 0,
+    tris: 0,
+    programs: 0,
+    textures: 0,
+    geometries: 0,
+    ms: 0,
+  };
+  window.__RENDER_INFO__ = renderInfo;
   engine.events.on('resize', () => {});
   const snapInfo = () => {
     const r = engine.ctx.peek('render');
-    window.__RENDER_INFO__ = {
-      frame: engine.time.frame,
-      calls: r?.renderer?.info.render.calls ?? 0,
-      tris: r?.renderer?.info.render.triangles ?? 0,
-      programs: r?.renderer?.info.programs?.length ?? 0,
-      textures: r?.renderer?.info.memory.textures ?? 0,
-      geometries: r?.renderer?.info.memory.geometries ?? 0,
-      ms: engine.time.dt * 1000,
-    };
+    renderInfo.frame = engine.time.frame;
+    renderInfo.calls = r?.renderer?.info.render.calls ?? 0;
+    renderInfo.tris = r?.renderer?.info.render.triangles ?? 0;
+    renderInfo.programs = r?.renderer?.info.programs?.length ?? 0;
+    renderInfo.textures = r?.renderer?.info.memory.textures ?? 0;
+    renderInfo.geometries = r?.renderer?.info.memory.geometries ?? 0;
+    renderInfo.ms = engine.time.dt * 1000;
   };
 
   /**

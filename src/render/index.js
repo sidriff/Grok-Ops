@@ -220,9 +220,19 @@ export class RenderSystem {
     // far cheaper than any spatial substitute at the same quality.
     this._viewSamples = this.qLevel >= 2 ? 4 : this.qLevel >= 1 ? 2 : 0;
 
-    // Always on: depthTexture/velocityTexture are part of the public contract
-    // (soft particles, SSR, motion blur) even when our own effects are off.
-    this.needsPrepass = true;
+    // Prepass writes depth/normal/velocity for soft particles, GTAO, contact,
+    // SSR, TAA, motion blur and DOF. On low those features are all off, and the
+    // extra full-scene walk is a major young-gen allocator (measured: ~30% of
+    // GC climb). Soft particles degrade to hard edges when depth is null.
+    this.needsPrepass = !!(
+      this.gtao ||
+      this.contact ||
+      this.ssr ||
+      this.taa ||
+      this.motionBlur ||
+      this.dof ||
+      q.forcePrepass
+    );
 
     this.hdrRt = null;
     this.viewRt = null;
@@ -1242,6 +1252,13 @@ export class RenderSystem {
 
   _cullLights(camPos) {
     const s = this.settings;
+    const maxPts = this.q?.maxPointLights ?? 20;
+    // Scratch ranking of point lights that pass the distance fade. Cap the
+    // visible count so forward+shadow light setup stays small on low quality —
+    // each extra point light multiplies per-draw uniform work and young-gen GC.
+    let nRank = 0;
+    const rank = this._lightRank ?? (this._lightRank = new Array(64));
+
     for (let i = 0; i < this.lights.length; i++) {
       const e = this.lights[i];
       // If the owner animated the intensity since we last wrote it, adopt the
@@ -1259,7 +1276,35 @@ export class RenderSystem {
       const gain = e.range <= PRACTICAL_RANGE ? s.practicalGain : 1;
       e.applied = e.baseIntensity * fade * gain;
       e.light.intensity = e.applied;
-      e.light.visible = fade > 0.002;
+      const inRange = fade > 0.002;
+      e.light.visible = inRange;
+      // Rank only world practicals (short range). FX flash pool uses range 90
+      // and must always stay in the light list when active.
+      if (inRange && e.light.isPointLight === true && e.range <= PRACTICAL_RANGE) {
+        e._cullDist = d;
+        if (nRank < rank.length) rank[nRank++] = e;
+      }
+    }
+
+    if (nRank > maxPts) {
+      // Keep the nearest practicals; hide the rest. Insertion selection is fine
+      // for N ≤ ~40 and allocates nothing.
+      for (let a = 0; a < maxPts; a++) {
+        let best = a;
+        for (let b = a + 1; b < nRank; b++) {
+          if (rank[b]._cullDist < rank[best]._cullDist) best = b;
+        }
+        if (best !== a) {
+          const t = rank[a];
+          rank[a] = rank[best];
+          rank[best] = t;
+        }
+      }
+      for (let i = maxPts; i < nRank; i++) {
+        rank[i].light.visible = false;
+        rank[i].light.intensity = 0;
+        rank[i].applied = 0;
+      }
     }
   }
 

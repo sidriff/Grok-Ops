@@ -133,29 +133,51 @@ export class ShellSystem {
     if (physics?.addRigidBody) {
       slot.proxy.position.copy(slot.pos);
       slot.proxy.quaternion.copy(slot.quat);
-      slot.body = physics.addRigidBody({
-        shape: 'box',
-        halfExtents: {
-          x: 0.0047 * slot.baseScale,
-          y: 0.0225 * slot.baseScale,
-          z: 0.0047 * slot.baseScale,
-        },
-        radius: 0.0047 * slot.baseScale,
-        mass: 0.0115 * slot.baseScale ** 3, // 11.5 g of 5.56 brass
-        position: slot.pos,
-        quaternion: slot.quat,
-        velocity: slot.vel,
-        angularVelocity: slot.spin,
-        restitution: 0.36,
-        friction: 0.42,
-        linearDamping: 0.1,
-        angularDamping: 0.25,
-        lifetime: LIFETIME + 1,
-        surfaceType: 'metal',
-        object3D: slot.proxy,
-        onImpact: this._onImpact,
-      });
-      if (slot.body) slot.body.userData = slot;
+      const mass = 0.0115 * slot.baseScale ** 3; // 11.5 g of 5.56 brass
+      // Reuse the slot's body when present — firefight rates would otherwise
+      // allocate a new RigidBody (+ probe Float32Array) on every eject.
+      if (slot.body) {
+        slot.body.rearm({
+          mass,
+          position: slot.pos,
+          quaternion: slot.quat,
+          velocity: slot.vel,
+          angularVelocity: slot.spin,
+          restitution: 0.36,
+          friction: 0.42,
+          linearDamping: 0.1,
+          angularDamping: 0.25,
+          lifetime: LIFETIME + 1,
+          object3D: slot.proxy,
+          onImpact: this._onImpact,
+          userData: slot,
+        });
+        physics.bodies.add(slot.body);
+      } else {
+        slot.body = physics.addRigidBody({
+          shape: 'box',
+          halfExtents: {
+            x: 0.0047 * slot.baseScale,
+            y: 0.0225 * slot.baseScale,
+            z: 0.0047 * slot.baseScale,
+          },
+          radius: 0.0047 * slot.baseScale,
+          mass,
+          position: slot.pos,
+          quaternion: slot.quat,
+          velocity: slot.vel,
+          angularVelocity: slot.spin,
+          restitution: 0.36,
+          friction: 0.42,
+          linearDamping: 0.1,
+          angularDamping: 0.25,
+          lifetime: LIFETIME + 1,
+          surfaceType: 'metal',
+          object3D: slot.proxy,
+          onImpact: this._onImpact,
+        });
+        if (slot.body) slot.body.userData = slot;
+      }
     }
     return slot;
   }
@@ -163,8 +185,8 @@ export class ShellSystem {
   _release(slot) {
     if (slot.body && this.fx.physics?.removeRigidBody) {
       this.fx.physics.removeRigidBody(slot.body);
+      // Keep slot.body for rearm — do not null it.
     }
-    slot.body = null;
     slot.alive = false;
   }
 

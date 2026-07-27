@@ -164,6 +164,12 @@ export class Animator {
     this.muzzleWorld = new THREE.Vector3();
     this.muzzleDir = new THREE.Vector3(0, 0, 1);
     this.ejectWorld = new THREE.Vector3();
+
+    // Preallocated IK bone/weight tables — filled lazily on first aim/look.
+    this._aimSpreadBones = null;
+    this._aimSpreadW = null;
+    this._lookBones = null;
+    this._lookW = null;
   }
 
   setState(s) {
@@ -362,12 +368,18 @@ export class Animator {
 
   /* ---------------- A: aim ---------------- */
 
+  _ensureIkTables() {
+    if (this._aimSpreadBones) return;
+    this._aimSpreadBones = [this.iSpine, this.iSpine1, this.iSpine2];
+    this._aimSpreadW = [0.12, 0.34, 0.54];
+    this._lookBones = [this.iNeck, this.iHead];
+    this._lookW = [0.4, 0.6];
+  }
+
   _aimIk(target, weight) {
-    const spread = [
-      [this.iSpine, 0.12],
-      [this.iSpine1, 0.34],
-      [this.iSpine2, 0.54],
-    ];
+    this._ensureIkTables();
+    const bones = this._aimSpreadBones;
+    const ws = this._aimSpreadW;
     for (let iter = 0; iter < 2; iter++) {
       const hand = this.bones[this.iHandR];
       const bore = this._v.copy(this.boreLocal).applyQuaternion(this._wq(this.iHandR, this._q2)).normalize();
@@ -384,9 +396,9 @@ export class Animator {
       const axis = this._v4.crossVectors(bore, want);
       if (axis.lengthSq() < 1e-10) return;
       axis.normalize();
-      for (const [bi, f] of spread) {
-        this._q3.setFromAxisAngle(axis, ang * f);
-        this._applyWorld(bi, this._q3);
+      for (let i = 0; i < bones.length; i++) {
+        this._q3.setFromAxisAngle(axis, ang * ws[i]);
+        this._applyWorld(bones[i], this._q3);
       }
     }
   }
@@ -394,12 +406,13 @@ export class Animator {
   /* ---------------- B: look-at ---------------- */
 
   _lookAt(target, weight) {
+    this._ensureIkTables();
     // the head's forward is its local +Z
-    const chain = [
-      [this.iNeck, 0.4],
-      [this.iHead, 0.6],
-    ];
-    for (const [bi, f] of chain) {
+    const bones = this._lookBones;
+    const ws = this._lookW;
+    for (let i = 0; i < bones.length; i++) {
+      const bi = bones[i];
+      const f = ws[i];
       const wq = this._wq(bi, this._q2);
       const fwd = this._v.set(0, 0, 1).applyQuaternion(wq);
       const want = this._v2.copy(target).sub(this._wp(bi, this._v3));

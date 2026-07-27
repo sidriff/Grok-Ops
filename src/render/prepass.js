@@ -125,15 +125,20 @@ export class GBuffer {
       const p = this.prev.get(object.id);
       if (p !== undefined) u.owPrevModelMatrix.value.copy(p);
       else u.owPrevModelMatrix.value.copy(object.matrixWorld);
-      u.owMatId.value = object.userData !== undefined ? object.userData.owMatId || 0 : 0;
+      const matId = object.userData !== undefined ? object.userData.owMatId || 0 : 0;
       // Skinned and morphed geometry deforms *inside* its transform, so the
       // matrix difference above describes none of the motion its pixels actually
       // have. Flag it so TAA can reject history there instead of smearing.
-      u.owCoverage.value =
+      const cov =
         object.isSkinnedMesh === true ||
         (object.morphTargetInfluences !== undefined && object.morphTargetInfluences !== null)
           ? OW_COVERAGE_DYNAMIC
           : 1;
+      // Always dirty the matrix (it changes every object). Only flag the whole
+      // program when scalars change — thrashing uniformsNeedUpdate forces a
+      // full re-upload of every uniform on every draw.
+      u.owMatId.value = matId;
+      u.owCoverage.value = cov;
       this.material.uniformsNeedUpdate = true;
     };
   }

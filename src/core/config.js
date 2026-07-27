@@ -30,8 +30,9 @@ export const QUALITY_PRESETS = {
     /** Cap devicePixelRatio so internal buffers stay sane on Retina/4K. */
     maxPixelRatio: 1,
     shadowMapSize: 1024,
-    cascades: 3,
-    shadowDistance: 60,
+    /** Two cascades: one less full scene walk + depth pass (major GC source). */
+    cascades: 2,
+    shadowDistance: 48,
     taa: false,
     gtao: false,
     ssr: false,
@@ -41,6 +42,8 @@ export const QUALITY_PRESETS = {
     anisotropy: 4,
     particleBudget: 2000,
     decalBudget: 64,
+    /** Cap visible practicals — each point light multiplies forward cost. */
+    maxPointLights: 8,
   },
   medium: {
     renderScale: 0.85,
@@ -57,6 +60,7 @@ export const QUALITY_PRESETS = {
     anisotropy: 8,
     particleBudget: 6000,
     decalBudget: 128,
+    maxPointLights: 14,
   },
   high: {
     renderScale: 1.0,
@@ -73,6 +77,7 @@ export const QUALITY_PRESETS = {
     anisotropy: 16,
     particleBudget: 12000,
     decalBudget: 256,
+    maxPointLights: 20,
   },
   ultra: {
     renderScale: 1.0,
@@ -89,6 +94,7 @@ export const QUALITY_PRESETS = {
     anisotropy: 16,
     particleBudget: 24000,
     decalBudget: 512,
+    maxPointLights: 24,
   },
 };
 

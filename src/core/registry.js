@@ -85,6 +85,8 @@ export class Registry {
 /** Minimal typed event bus. Handlers are called synchronously. */
 export class EventBus {
   #map = new Map();
+  /** Reused dispatch buffer — emit() must not allocate. */
+  #dispatch = [];
 
   on(type, fn) {
     (this.#map.get(type) ?? this.#map.set(type, new Set()).get(type)).add(fn);
@@ -105,9 +107,15 @@ export class EventBus {
 
   emit(type, payload) {
     const set = this.#map.get(type);
-    if (!set) return;
-    // Copy so handlers may unsubscribe during dispatch.
-    for (const fn of [...set]) {
+    if (!set || set.size === 0) return;
+    // Snapshot into a reused array so handlers may unsubscribe mid-dispatch
+    // without allocating a fresh `[...set]` every weapon:fire / impact.
+    const buf = this.#dispatch;
+    let n = 0;
+    for (const fn of set) buf[n++] = fn;
+    for (let i = 0; i < n; i++) {
+      const fn = buf[i];
+      buf[i] = null;
       try {
         fn(payload);
       } catch (err) {
@@ -118,5 +126,6 @@ export class EventBus {
 
   clear() {
     this.#map.clear();
+    this.#dispatch.length = 0;
   }
 }

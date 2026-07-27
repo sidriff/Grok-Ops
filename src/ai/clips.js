@@ -30,7 +30,7 @@ const lobe = (x, k = 1.4) => {
 /* ------------------------------------------------------------------ */
 
 /** Weight on the left leg, knees soft, weapon at low ready. */
-export function idle(P, ph, p = {}) {
+export function idle(P, ph) {
   const t = ph * TAU;
   const breath = sin(t * 0.55);
   const sway = sin(t * 0.31 + 1.1);
@@ -90,23 +90,27 @@ export function aimAdd(P, w = 1) {
 /* locomotion                                                         */
 /* ------------------------------------------------------------------ */
 
+/** One leg of a gait cycle. Names are string constants (no template alloc). */
+function gaitLeg(P, t, k, side, upLeg, leg, foot, toe) {
+  const o = side > 0 ? 0 : Math.PI; // legs half a cycle apart
+  const a = t + o;
+  // thigh: swings forward through the air, back through stance
+  const thigh = k.thigh * sin(a) + k.thighBias;
+  // knee: heavy flexion just after toe-off, small at heel strike
+  const knee = -(k.kneeBase + k.knee * lobe(a - 0.55, 1.5) + k.kneeStance * lobe(a + Math.PI + 0.4, 2));
+  // ankle: toe-off push then dorsiflexion to clear the ground
+  const ankle = k.ankle * sin(a - 1.9) + k.ankleBias;
+  P.d(upLeg, thigh, side * k.thighTwist, side * k.splay);
+  P.d(leg, knee, 0, 0);
+  P.d(foot, ankle, -side * 1.5, 0);
+  P.d(toe, Math.max(0, -k.toe * sin(a - 2.6)), 0, 0);
+}
+
 function gait(P, ph, k) {
   const t = ph * TAU;
-  for (const side of [1, -1]) {
-    const s = side > 0 ? 'R' : 'L';
-    const o = side > 0 ? 0 : Math.PI; // legs half a cycle apart
-    const a = t + o;
-    // thigh: swings forward through the air, back through stance
-    const thigh = k.thigh * sin(a) + k.thighBias;
-    // knee: heavy flexion just after toe-off, small at heel strike
-    const knee = -(k.kneeBase + k.knee * lobe(a - 0.55, 1.5) + k.kneeStance * lobe(a + Math.PI + 0.4, 2));
-    // ankle: toe-off push then dorsiflexion to clear the ground
-    const ankle = k.ankle * sin(a - 1.9) + k.ankleBias;
-    P.d(`UpLeg${s}`, thigh, side * k.thighTwist, side * k.splay);
-    P.d(`Leg${s}`, knee, 0, 0);
-    P.d(`Foot${s}`, ankle, -side * 1.5, 0);
-    P.d(`Toe${s}`, Math.max(0, -k.toe * sin(a - 2.6)), 0, 0);
-  }
+  // Unrolled — no [1,-1] array and no template-string bone names per frame.
+  gaitLeg(P, t, k, 1, 'UpLegR', 'LegR', 'FootR', 'ToeR');
+  gaitLeg(P, t, k, -1, 'UpLegL', 'LegL', 'FootL', 'ToeL');
   // pelvis: two bobs per stride, roll toward the stance leg, counter-yaw
   P.hip(k.sway * sin(t), k.bobBias + k.bob * cos(2 * t), 0);
   P.d('Hips', k.pelvisTilt, k.pelvisYaw * sin(t), k.pelvisRoll * sin(t + 1.2));
@@ -208,13 +212,19 @@ export function hurtIdle(P, ph) {
 /** Pivot on the balls of the feet: the trailing foot lifts and re-plants. */
 export function turnStep(P, t, dir) {
   const e = Math.sin(Math.PI * Math.min(1, t)); // 0..1..0
-  const s = dir > 0 ? 'R' : 'L';
-  const o = dir > 0 ? 'L' : 'R';
-  P.d(`UpLeg${s}`, 12 * e, dir * 16 * e, 0);
-  P.d(`Leg${s}`, -34 * e, 0, 0);
-  P.d(`Foot${s}`, 16 * e, 0, 0);
-  P.d(`UpLeg${o}`, -4 * e, -dir * 4 * e, 0);
-  P.d(`Leg${o}`, -10 * e, 0, 0);
+  if (dir > 0) {
+    P.d('UpLegR', 12 * e, dir * 16 * e, 0);
+    P.d('LegR', -34 * e, 0, 0);
+    P.d('FootR', 16 * e, 0, 0);
+    P.d('UpLegL', -4 * e, -dir * 4 * e, 0);
+    P.d('LegL', -10 * e, 0, 0);
+  } else {
+    P.d('UpLegL', 12 * e, dir * 16 * e, 0);
+    P.d('LegL', -34 * e, 0, 0);
+    P.d('FootL', 16 * e, 0, 0);
+    P.d('UpLegR', -4 * e, -dir * 4 * e, 0);
+    P.d('LegR', -10 * e, 0, 0);
+  }
   P.d('Hips', 0, dir * 6 * e, dir * -2 * e);
   P.hip(0, -0.012 * e, 0);
 }

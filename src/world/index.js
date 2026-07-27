@@ -62,13 +62,12 @@ const LEVEL_TX = 0.9;
 const LEVEL_TZ = 1.34;
 
 /**
- * How many zero-intensity "ballast" point lights the world parks in the scene to
- * hold `numPointLights` — and therefore the shader permutation — constant. See
- * `_addBallast()`. Must be at least the worst-case number of practicals that can
- * be in range at once: a sweep of the whole playable area at three eye heights
- * puts that at 10 for the world's own lights, plus whatever `fx` keeps live.
+ * Default ballast target. Overridden at runtime from `config.q.maxPointLights`
+ * so low quality holds a smaller, cheaper permutation. See `_addBallast()`.
+ * Must cover the worst-case number of practicals that can be in range at once
+ * plus FX pool lights that stay visible.
  */
-const LIGHT_SLOTS = 20;
+const LIGHT_SLOTS_DEFAULT = 20;
 
 /** Spawn points in LEVEL space: [x, z, yaw, tag]. Yaw 0 faces -Z (toward the gate). */
 const SPAWNS = [
@@ -227,8 +226,11 @@ export class WorldSystem {
    * ballast slots live: p05 frame time 15.7 ms -> 14.4 ms (i.e. inside noise).
    */
   _addBallast() {
+    // Size the ballast pool for the active quality's light budget (+FX slack).
+    const budget = this.ctx?.config?.q?.maxPointLights ?? LIGHT_SLOTS_DEFAULT;
+    this._lightTarget = budget;
     this._ballast = [];
-    for (let i = 0; i < LIGHT_SLOTS + 4; i++) {
+    for (let i = 0; i < budget + 6; i++) {
       const l = new THREE.PointLight(0x000000, 0, 0.01, 2);
       l.name = `world_light_ballast_${i}`;
       l.castShadow = false;
@@ -242,7 +244,6 @@ export class WorldSystem {
     /** Point lights in the scene that are NOT ballast; refreshed periodically. */
     this._pointLights = [];
     this._pointLightsFrame = -1e9;
-    this._lightTarget = LIGHT_SLOTS;
     this._lightRanges = new Map(); // light -> the cull radius `render` gave it
     this._camPos = new THREE.Vector3();
     this._collectPointLight = (o) => {
@@ -297,8 +298,11 @@ export class WorldSystem {
     }
 
     // A subsystem can always out-run the pool; adopting the higher count costs
-    // one compile, once, instead of one per crossing.
-    if (n > this._lightTarget) this._lightTarget = n;
+    // one compile, once, instead of one per crossing. Cap at the quality budget
+    // so low never stabilises to a 20-light permutation.
+    const cap = ctx.config?.q?.maxPointLights ?? LIGHT_SLOTS_DEFAULT;
+    if (n > this._lightTarget) this._lightTarget = Math.min(n, cap + 4);
+    if (this._lightTarget > cap + 4) this._lightTarget = cap + 4;
     const want = this._lightTarget - n;
     const pool = this._ballast;
     for (let i = 0; i < pool.length; i++) {

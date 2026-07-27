@@ -55,17 +55,26 @@ export function setText(node, value) {
 
 /** Write any style property only on change. */
 export function setStyle(node, prop, value) {
-  const key = '_ows_' + prop;
-  if (node[key] !== value) {
-    node[key] = value;
+  // Cache on a fixed Map so we never allocate `'_ows_' + prop` strings per frame.
+  let cache = node._owStyle;
+  if (!cache) {
+    cache = new Map();
+    node._owStyle = cache;
+  }
+  if (cache.get(prop) !== value) {
+    cache.set(prop, value);
     node.style.setProperty(prop, value);
   }
 }
 
 export function setClass(node, cls, on) {
-  const key = '_owc_' + cls;
-  if (node[key] !== on) {
-    node[key] = on;
+  let cache = node._owClass;
+  if (!cache) {
+    cache = new Map();
+    node._owClass = cache;
+  }
+  if (cache.get(cls) !== on) {
+    cache.set(cls, on);
     node.classList.toggle(cls, on);
   }
 }

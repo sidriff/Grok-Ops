@@ -93,6 +93,43 @@ export class RigidBody {
     this.prevQuaternion.copy(this.quaternion);
   }
 
+  /**
+   * Re-arm a recycled body for another life. Used by shell casings (and any
+   * other high-frequency debris) so a firefight does not `new RigidBody` and
+   * reallocate probe arrays every eject.
+   */
+  rearm(opts = {}) {
+    this.active = true;
+    this.sleeping = false;
+    this.sleepTimer = 0;
+    this.age = 0;
+    this._impactCooldown = 0;
+    if (opts.mass !== undefined) {
+      this.mass = opts.mass;
+      this.invMass = this.mass > 0 ? 1 / this.mass : 0;
+      this._computeInertia();
+    }
+    if (opts.lifetime !== undefined) this.lifetime = opts.lifetime;
+    if (opts.restitution !== undefined) this.restitution = opts.restitution;
+    if (opts.friction !== undefined) this.friction = opts.friction;
+    if (opts.linearDamping !== undefined) this.linearDamping = opts.linearDamping;
+    if (opts.angularDamping !== undefined) this.angularDamping = opts.angularDamping;
+    if (opts.object3D !== undefined) this.object3D = opts.object3D;
+    if (opts.onImpact !== undefined) this.onImpact = opts.onImpact;
+    if (opts.userData !== undefined) this.userData = opts.userData;
+    if (opts.surface !== undefined) this.surface = opts.surface;
+    if (opts.position) this.position.copy(opts.position);
+    if (opts.quaternion) this.quaternion.copy(opts.quaternion);
+    if (opts.velocity) this.linearVelocity.copy(opts.velocity);
+    else this.linearVelocity.set(0, 0, 0);
+    if (opts.angularVelocity) this.angularVelocity.copy(opts.angularVelocity);
+    else this.angularVelocity.set(0, 0, 0);
+    this.prevPosition.copy(this.position);
+    this.prevQuaternion.copy(this.quaternion);
+    this.updateInertiaWorld();
+    return this;
+  }
+
   _computeInertia() {
     const m = this.mass;
     if (m <= 0) {
