@@ -8,7 +8,8 @@ Fork of [Claude of Duty](https://github.com/mshumer/Claude-of-Duty) (mshumer) â€
 
 ```bash
 bun install
-bun run dev          # http://127.0.0.1:5173
+bun run dev          # http://127.0.0.1:5173  (HMR off â€” refresh for changes)
+OW_HMR=1 bun run dev # optional: classic Vite hot reload
 ```
 
 Click the canvas to lock the cursor. WASD move, mouse aim, LMB fire, RMB ADS,
