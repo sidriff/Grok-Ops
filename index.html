@@ -504,6 +504,32 @@
         outline: 2px solid #ffd078;
         outline-offset: 3px;
       }
+      /* Deploy just became available — three bright pulses, then settle */
+      #boot-deploy.is-action.is-ready-flash {
+        animation: boot-deploy-ready 2.2s ease-out 1;
+      }
+      @keyframes boot-deploy-ready {
+        0%, 100% {
+          background: #ffb02a;
+          border-color: #ffb02a;
+          box-shadow: 0 0 22px rgba(255, 176, 42, 0.28);
+          filter: brightness(1);
+        }
+        12%, 38%, 64% {
+          background: #ffe08a;
+          border-color: #fff0c0;
+          box-shadow:
+            0 0 0 3px rgba(255, 220, 120, 0.55),
+            0 0 36px rgba(255, 196, 64, 0.75);
+          filter: brightness(1.18);
+        }
+        25%, 51%, 78% {
+          background: #ffb02a;
+          border-color: #ffb02a;
+          box-shadow: 0 0 22px rgba(255, 176, 42, 0.28);
+          filter: brightness(1);
+        }
+      }
 
       /* Pause-only: back to title shell (reload) */
       #boot-retreat {
@@ -1313,7 +1339,8 @@
               The scaffold was really impressive. But a lot of it was DOA when I tried to play it.
               <br /><br />
               I was able to refine it with <strong>Grok</strong> and my experience as a game designer.
-              It took 4 to 5 hours and many small iterations. The Bitter Lesson doesn’t apply to games. Yet.
+              After spending 5 hours making small iterative changes, I feel pretty confident that
+              the Bitter Lesson doesn’t apply to game design. Yet.
               <br /><a href="https://x.com/sidriff" target="_blank" rel="noopener noreferrer">— @sidriff</a>
             </p>
 

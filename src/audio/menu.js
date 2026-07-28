@@ -18,8 +18,47 @@ import { ad, biquad, clamp, gain, hit, osc, series } from './dsp.js';
 /* ------------------------------------------------------------------ */
 
 /**
+ * Short radio squelch + band-limited hiss (matches the game's vox radio ends).
  * @param {BaseAudioContext} actx
- * @param {string} kind  click | select | confirm | tick | open | close
+ * @param {AudioNode} dest
+ * @param {number} t0
+ * @param {number} lvl
+ */
+function radioSquelch(actx, dest, t0, lvl) {
+  // Crack at open / close of the "transmission".
+  for (const st of [t0, t0 + 0.28]) {
+    const n = Math.floor(actx.sampleRate * 0.05);
+    const buf = actx.createBuffer(1, n, actx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = actx.createBufferSource();
+    src.buffer = buf;
+    const bp = biquad(actx, 'bandpass', 2600, 1.6);
+    const g = gain(actx, 0);
+    series(src, bp, g).connect(dest);
+    hit(g.gain, st, 0.14 * lvl, 0.028);
+    src.start(st);
+    src.stop(st + 0.055);
+  }
+  // Thin static bed between the clicks.
+  const n2 = Math.floor(actx.sampleRate * 0.32);
+  const buf2 = actx.createBuffer(1, n2, actx.sampleRate);
+  const d2 = buf2.getChannelData(0);
+  for (let i = 0; i < n2; i++) d2[i] = Math.random() * 2 - 1;
+  const src2 = actx.createBufferSource();
+  src2.buffer = buf2;
+  const hp = biquad(actx, 'highpass', 900, 0.7);
+  const lp = biquad(actx, 'lowpass', 3400, 0.85);
+  const g2 = gain(actx, 0);
+  series(src2, hp, lp, g2).connect(dest);
+  ad(g2.gain, t0 + 0.02, 0.07 * lvl, 0.02, 0.26);
+  src2.start(t0);
+  src2.stop(t0 + 0.34);
+}
+
+/**
+ * @param {BaseAudioContext} actx
+ * @param {string} kind  click | select | confirm | tick | open | close | ready
  * @param {{ when?: number, level?: number }} [o]
  */
 export function menuUiSound(actx, kind, o = {}) {
@@ -28,6 +67,23 @@ export function menuUiSound(actx, kind, o = {}) {
   const out = gain(actx, 1);
 
   switch (kind) {
+    case 'ready': {
+      // Deploy is live: radio open + two-tone clear + radio close.
+      radioSquelch(actx, out, t0, lvl);
+      const freqs = [660, 990];
+      for (let i = 0; i < freqs.length; i++) {
+        const bt = t0 + 0.1 + i * 0.07;
+        const o1 = osc(actx, 'triangle', freqs[i]);
+        const g = gain(actx, 0);
+        const lp = biquad(actx, 'lowpass', 4200, 0.75);
+        o1.connect(g);
+        series(g, lp).connect(out);
+        ad(g.gain, bt, 0.42 * lvl * (1 - i * 0.15), 0.005, 0.14);
+        o1.start(bt);
+        o1.stop(bt + 0.28);
+      }
+      break;
+    }
     case 'tick': {
       // Soft slider grain — barely there.
       const o1 = osc(actx, 'sine', 1400);
@@ -363,7 +419,7 @@ export class MenuAudio {
   }
 
   /**
-   * @param {'click'|'select'|'confirm'|'tick'|'open'|'close'} kind
+   * @param {'click'|'select'|'confirm'|'tick'|'open'|'close'|'ready'} kind
    */
   play(kind, level = 1) {
     // Fire-and-forget; ensure is async but we schedule after resume when possible.

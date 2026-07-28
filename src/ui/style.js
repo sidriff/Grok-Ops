@@ -118,6 +118,28 @@ const CSS = `
 /* thin lower "shotgun" reference tick — reads as a real reticle, not a plus */
 .ow-cross-ads { position:absolute; left:0; top:0; }
 
+/* Reload: blades/dot hide; this ring fills 0→1 with clip progress */
+.ow-reload-ring {
+  position:absolute; left:0; top:0;
+  width: calc(36px * var(--k)); height: calc(36px * var(--k));
+  margin-left: calc(-18px * var(--k)); margin-top: calc(-18px * var(--k));
+  pointer-events:none;
+  will-change: opacity;
+}
+.ow-reload-ring svg { display:block; width:100%; height:100%; overflow:visible; }
+.ow-reload-track {
+  stroke: rgba(255,255,255,.18);
+  stroke-width: 1.6;
+  /* dark halo so the ring reads on bright sand / snow */
+  filter: drop-shadow(0 0 1px rgba(0,0,0,.75));
+}
+.ow-reload-fill {
+  stroke: #fff;
+  stroke-width: 1.85;
+  stroke-linecap: butt;
+  filter: drop-shadow(0 0 1px rgba(0,0,0,.7));
+}
+
 /* ============================================================ hitmarkers */
 .ow-hit {
   position:absolute; left:50%; top:50%;

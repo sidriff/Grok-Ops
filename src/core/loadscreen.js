@@ -167,6 +167,7 @@ export class LoadScreen {
     this._input = null;
     this._qCards = [];
     this._hideTimer = 0;
+    this._readyFlashTimer = 0;
     this._menuAudio = new MenuAudio();
     this._recorder = new RunRecorder();
     this._lastTickAt = 0;
@@ -438,6 +439,8 @@ export class LoadScreen {
     this._ready = true;
     this._progress = 1;
     this._phase = 'ready';
+    // Title shell stays windowed — fullscreen only rides the Deploy gesture.
+    this._ensureWindowedUntilDeploy();
     this._showShell({ ready: true });
     this._setPanelMode('weapons');
     if (this.fillEl) this.fillEl.style.width = '100%';
@@ -448,6 +451,7 @@ export class LoadScreen {
     if (meta != null && this.metaEl) this.metaEl.textContent = meta;
     this._setActionButton('deploy');
     this.deployBtn?.focus?.({ preventScroll: true });
+    this._cueDeployReady();
   }
 
   /**
@@ -484,11 +488,14 @@ export class LoadScreen {
     else if (this._selectedQuality) {
       this.setMeta(`${this._selectedQuality.toUpperCase()} · ready`);
     }
+    // Soft return also stays windowed until the next Deploy click.
+    this._ensureWindowedUntilDeploy();
     this._showShell({ ready: true });
     this._setActionButton('deploy');
     this.deployBtn?.focus?.({ preventScroll: true });
     this._menuAudio.play('open');
     this._menuAudio.startMusic();
+    this._cueDeployReady();
   }
 
   waitForDeploy() {
@@ -715,6 +722,10 @@ export class LoadScreen {
     removeEventListener('keydown', this._onKey);
     if (this.deployBtn) this.deployBtn.removeEventListener('click', this._onCtaClick);
     if (this.retreatBtn) this.retreatBtn.removeEventListener('click', this._onRetreatClick);
+    if (this._readyFlashTimer) {
+      clearTimeout(this._readyFlashTimer);
+      this._readyFlashTimer = 0;
+    }
     this.root?.classList.remove('boot-paused');
     this._menuAudio.stopMusic({ immediate: true });
     this._menuAudio.dispose();
@@ -798,8 +809,67 @@ export class LoadScreen {
 
     btn.classList.toggle('is-loading', mode === 'loading');
     btn.classList.toggle('is-action', mode === 'load' || mode === 'deploy' || mode === 'resume');
+    // Clear ready flash when leaving the Deploy CTA (loading / resume / load).
+    if (mode !== 'deploy') btn.classList.remove('is-ready-flash');
     btn.disabled = mode === 'loading';
     btn.setAttribute('aria-busy', mode === 'loading' ? 'true' : 'false');
+  }
+
+  /**
+   * Drop browser fullscreen while the title shell owns the screen.
+   * Fullscreen is re-entered only on Deploy / Resume (user gesture).
+   */
+  _ensureWindowedUntilDeploy() {
+    if (!document.fullscreenElement) return;
+    // Pause shell may already be fullscreen from the previous match — leave it.
+    if (this._phase === 'paused' || this._inGame) return;
+    try {
+      document.exitFullscreen?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * Deploy just became available: flash the CTA + radio ready cue.
+   * Fire once per ready entry (not on pause Resume).
+   */
+  _cueDeployReady() {
+    const btn = this.deployBtn;
+    if (btn) {
+      btn.classList.remove('is-ready-flash');
+      // Force reflow so re-entering ready restarts the animation.
+      void btn.offsetWidth;
+      btn.classList.add('is-ready-flash');
+      if (this._readyFlashTimer) clearTimeout(this._readyFlashTimer);
+      this._readyFlashTimer = setTimeout(() => {
+        btn.classList.remove('is-ready-flash');
+        this._readyFlashTimer = 0;
+      }, 2400);
+    }
+    // Menu: radio squelch + clear tones (works even if game graph is quiet).
+    this._sfx('ready', 1);
+    // Game: short radio "copy" if the match audio system is already up.
+    this._playReadyRadioBark();
+  }
+
+  _playReadyRadioBark() {
+    const game = this._gameAudio;
+    if (!game || typeof game.bark !== 'function') return;
+    const fire = () => {
+      try {
+        game.bark('copy', null, { radio: true, force: true, level: 0.75, send: 0.08 });
+      } catch {
+        /* optional flavour */
+      }
+    };
+    try {
+      const p = typeof game.start === 'function' ? game.start() : null;
+      if (p && typeof p.then === 'function') p.then(fire, () => {});
+      else fire();
+    } catch {
+      /* game audio optional */
+    }
   }
 
   _showShell({ ready = false } = {}) {
