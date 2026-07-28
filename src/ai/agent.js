@@ -57,8 +57,11 @@ const HITBOXES = [
  * `kind` optional: 'hinge' for knees (and elbows) — no side-splay.
  * `map` false = weld stub only (shoulder/hip), not driven as a mesh bone.
  *
- * Legs are intentionally heavier + tighter than arms: thighs use a rest-pose
- * ball cone (~50°), knees are hinges so shins can't flop out of plane.
+ * Shoulder/hip stubs must NOT be free cones: a 179° stub makes the next bone's
+ * rest-pose cone meaningless (parent frame tumbles → arm/leg spaghetti). Cones
+ * are around the death-pose rest direction in the parent frame.
+ *
+ * Legs are heavier + tighter than arms; knees/elbows are hinges.
  */
 const DOLL = [
   ['Hips', 'Spine', 0.135, 0.14, -1, 0, 0, true],
@@ -67,21 +70,21 @@ const DOLL = [
   ['Spine2', 'Neck', 0.130, 0.10, 2, 16, 10, true],
   ['Neck', 'Head', 0.052, 0.03, 3, 30, 25, true],
   ['Head', 'HeadTop', 0.098, 0.07, 4, 42, 30, true],
-  // stubs: free cone (lateral vs spine) — only weld particles
-  ['Spine2', 'UpperArmR', 0.055, 0.02, 3, 179, 179, false],
-  ['UpperArmR', 'ForearmR', 0.058, 0.027, 6, 85, 45, true],
+  // Shoulder stubs: weld particles + limited ball (rest-pose cone), not free.
+  ['Spine2', 'UpperArmR', 0.055, 0.02, 3, 52, 38, false],
+  ['UpperArmR', 'ForearmR', 0.058, 0.027, 6, 72, 40, true],
   ['ForearmR', 'HandR', 0.048, 0.018, 7, 12, 20, true, 'hinge'],
   ['HandR', 'FingersR', 0.038, 0.006, 8, 45, 30, true],
-  ['Spine2', 'UpperArmL', 0.055, 0.02, 3, 179, 179, false],
-  ['UpperArmL', 'ForearmL', 0.058, 0.027, 10, 85, 45, true],
+  ['Spine2', 'UpperArmL', 0.055, 0.02, 3, 52, 38, false],
+  ['UpperArmL', 'ForearmL', 0.058, 0.027, 10, 72, 40, true],
   ['ForearmL', 'HandL', 0.048, 0.018, 11, 12, 20, true, 'hinge'],
   ['HandL', 'FingersL', 0.038, 0.006, 12, 45, 30, true],
-  // hips free stub; thighs rest-cone (not free ball); knees hinge; fat shins
-  ['Hips', 'UpLegR', 0.07, 0.03, 0, 179, 179, false],
+  // Hip stubs: limited ball; thighs rest-cone; knees hinge.
+  ['Hips', 'UpLegR', 0.07, 0.03, 0, 55, 28, false],
   ['UpLegR', 'LegR', 0.1, 0.14, 14, 48, 18, true],
   ['LegR', 'FootR', 0.078, 0.065, 15, 10, 12, true, 'hinge'],
   ['FootR', 'ToeR', 0.055, 0.02, 16, 28, 14, true],
-  ['Hips', 'UpLegL', 0.07, 0.03, 0, 179, 179, false],
+  ['Hips', 'UpLegL', 0.07, 0.03, 0, 55, 28, false],
   ['UpLegL', 'LegL', 0.1, 0.14, 18, 48, 18, true],
   ['LegL', 'FootL', 0.078, 0.065, 19, 10, 12, true, 'hinge'],
   ['FootL', 'ToeL', 0.055, 0.02, 20, 28, 14, true],
@@ -1282,7 +1285,15 @@ export class Agent {
       rowToSpec[i] = si;
       const p = parent >= 0 ? rowToSpec[parent] : -1;
       const isHinge = kind === 'hinge';
+      const isStub = !mapped;
       const isLeg = /^(UpLeg|Leg|Foot)/.test(headName);
+
+      // Base stiff; ragdoll multiplies by muscle-tone over the first ~0.8s.
+      // Stubs + legs high so shoulders/hips don't freefall into spaghetti.
+      let stiff = 0.7;
+      if (isHinge) stiff = 0.95;
+      else if (isStub) stiff = 0.92;
+      else if (isLeg) stiff = 0.85;
 
       spec.push({
         name: mapped ? headName : `${headName}>${tailName}`,
@@ -1297,8 +1308,7 @@ export class Agent {
         // Knees: almost no hyperextension, full sit-down flex.
         hingeMin: isHinge ? -6 * DEG : 0,
         hingeMax: isHinge ? 150 * DEG : 0,
-        // Legs stiffer than arms so they plant instead of noodle.
-        stiff: isHinge ? 0.92 : isLeg ? 0.78 : 0.55,
+        stiff,
       });
       boneMap[si] = mapped ? byName.get(headName) ?? null : null;
     }

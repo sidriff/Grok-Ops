@@ -15,6 +15,10 @@
  *   3. twist limit      (roll of a bone's reference frame, damped)
  *   4. world contact    (capsule vs static BVH + Coulomb friction)
  *
+ * Muscle tone (post-death phases) scales per-bone angular stiffness and cone
+ * width so the first quarter-second keeps a hit-reaction pose, then fades to
+ * limp — pure limp-from-frame-zero reads as wet spaghetti.
+ *
  * `ai` hands over a dead actor with createRagdoll()/adoptSkeleton() and we own
  * the bone transforms from that moment on.
  */
@@ -92,6 +96,23 @@ const FORCE_SLEEP_MOTION = 0.007;
 const IMPULSE_MASS_FLOOR = 3.5;
 /** Max Verlet previous-pos kick from one impulse (m) ≈ 6 m/s at 120 Hz. */
 const MAX_IMPULSE_KICK = 0.05;
+
+/**
+ * Muscle tone timeline (seconds after death):
+ *   [0, TONE_HIT)     hit reaction — stiffer angular projection
+ *   [TONE_HIT, TONE_LIMP) collapse — fade stiff + open cones
+ *   [TONE_LIMP, ∞)    limp (authored stiff, full cones)
+ *
+ * Cones only *widen* after the hit window (never stay tighter long-term). A
+ * standing rest pose with permanently tight cones freezes upright; anti-noodle
+ * is mostly clamped shoulder/hip stubs + higher base stiff on limbs.
+ */
+const TONE_HIT = 0.18;
+const TONE_LIMP = 0.5;
+const TONE_STIFF_HIT = 1.15;
+const TONE_STIFF_LIMP = 1.0;
+const TONE_CONE_HIT = 0.9;
+const TONE_CONE_LIMP = 1.0;
 
 let _nextRagdollId = 1;
 
@@ -173,8 +194,11 @@ export class Ragdoll {
     this.boneRestLocal = new Float32Array(nb * 3);
     /** Hinge axis in parent bone frame at rest. */
     this.boneHingeLocal = new Float32Array(nb * 3);
-    /** Per-bone angular correction stiffness (higher = less noodle). */
+    /** Per-bone angular correction stiffness (live; scaled by muscle tone). */
     this.boneStiff = new Float32Array(nb);
+    /** Authored stiff / cone before tone scaling. */
+    this.boneStiffBase = new Float32Array(nb);
+    this.boneConeBase = new Float32Array(nb);
     /** Reference up-vector per bone, parallel-transported for twist. */
     this.boneUp = new Float32Array(nb * 3);
 
@@ -188,12 +212,16 @@ export class Ragdoll {
       // Floor extremity mass so light hands don't dominate the thrash budget.
       this.boneMass[i] = Math.max(0.8, (s.mass ?? 4) * massScale);
       this.boneParent[i] = s.parent ?? -1;
-      this.boneCone[i] = s.cone ?? 70 * DEG;
+      const cone0 = s.cone ?? 70 * DEG;
+      this.boneConeBase[i] = cone0;
+      this.boneCone[i] = cone0;
       this.boneTwist[i] = s.twist ?? 40 * DEG;
       this.boneHinge[i] = s.hinge ? 1 : 0;
       this.boneHingeMin[i] = s.hingeMin ?? -8 * DEG;
       this.boneHingeMax[i] = s.hingeMax ?? 145 * DEG;
-      this.boneStiff[i] = s.stiff ?? (s.hinge ? 0.88 : 0.55);
+      const stiff0 = s.stiff ?? (s.hinge ? 0.88 : 0.55);
+      this.boneStiffBase[i] = stiff0;
+      this.boneStiff[i] = stiff0;
       pm[a] += this.boneMass[i] * 0.5;
       pm[c] += this.boneMass[i] * 0.5;
       this.boneUp[i * 3] = 0;
@@ -438,12 +466,44 @@ export class Ragdoll {
     this.sleepTimer = 0;
   }
 
+  /**
+   * Hit-reaction → collapse → limp. Updates live boneStiff / boneCone from the
+   * authored bases so the death pose holds briefly instead of noodling on frame 0.
+   */
+  _applyMuscleTone() {
+    const age = this.age;
+    let stiffScale;
+    let coneScale;
+    if (age < TONE_HIT) {
+      stiffScale = TONE_STIFF_HIT;
+      coneScale = TONE_CONE_HIT;
+    } else if (age < TONE_LIMP) {
+      const t = (age - TONE_HIT) / (TONE_LIMP - TONE_HIT);
+      // smoothstep
+      const s = t * t * (3 - 2 * t);
+      stiffScale = TONE_STIFF_HIT + (TONE_STIFF_LIMP - TONE_STIFF_HIT) * s;
+      coneScale = TONE_CONE_HIT + (TONE_CONE_LIMP - TONE_CONE_HIT) * s;
+    } else {
+      stiffScale = TONE_STIFF_LIMP;
+      coneScale = TONE_CONE_LIMP;
+    }
+    const nb = this.boneCount;
+    const maxCone = Math.PI - 1e-3;
+    for (let i = 0; i < nb; i++) {
+      const st = this.boneStiffBase[i] * stiffScale;
+      this.boneStiff[i] = st > 1 ? 1 : st;
+      const c = this.boneConeBase[i] * coneScale;
+      this.boneCone[i] = c > maxCone ? maxCone : c;
+    }
+  }
+
   step(dt) {
     if (!this.alive || this.sleeping) return;
     this.age += dt;
+    this._applyMuscleTone();
     const n = this.particleCount;
     const g = this.gravity * dt * dt;
-    // Age into stickier damping — leave the first ~0.6s lively for the flop.
+    // Age into stickier damping — leave the first ~0.55s lively for the flop.
     const ageBleed = this.age < 0.55 ? 0 : Math.min(0.1, (this.age - 0.55) * 0.1);
     const damp = Math.max(0.9, this.linearDamping - ageBleed);
 
@@ -482,7 +542,8 @@ export class Ragdoll {
     // Bleed residual velocity *after* constraints. PBD contact/hinge fighting
     // writes position corrections that become next-step velocity; without this
     // the sleep timer resets forever on a twitching pile.
-    // Ramp after the flop window so we don't freeze mid-collapse.
+    // Bleed residual velocity *after* constraints. Light during the flop so
+    // gravity can fold a standing death pose; ramp after ~0.5s.
     const settle =
       this.age < 0.5 ? 0.03 : Math.min(0.32, 0.06 + (this.age - 0.5) * 0.2);
     let motion = 0;
