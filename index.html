@@ -1075,14 +1075,14 @@
           <div class="boot-load-main">
             <p class="boot-blurb" id="boot-blurb">
               <strong>Grok Ops</strong> is a
-              <a href="https://github.com/sidriff/Claude-of-Duty" target="_blank" rel="noopener noreferrer">fork</a>
-              of
+              <a href="https://github.com/sidriff/Grok-Ops" target="_blank" rel="noopener noreferrer">fork</a>
+              of the one-shot
               <a href="https://github.com/mshumer/Claude-of-Duty" target="_blank" rel="noopener noreferrer">Claude of Duty</a>
-              by <a href="https://x.com/mattshumer_" target="_blank" rel="noopener noreferrer">@mattshumer_</a>
-              — a short browser firefight on that scaffold.
-              Built by <strong>Grok</strong> and a professional game designer
-              to demo what a human–AI team can ship when they iterate together.
-              If you want to shred tokens, keep trying to one-shot. If you want to make something fun, iterate like a game designer.
+              by <a href="https://x.com/mattshumer_" target="_blank" rel="noopener noreferrer">@mattshumer_</a>.
+              The scaffold was really impressive. But a lot of it was DOA when I tried to play it.
+              <br /><br />
+              I was able to refine it with <strong>Grok</strong> and my experience as a game designer.
+              It took 4 to 5 hours and many small iterations. The Bitter Lesson doesn’t apply to games. Yet.
               <br /><a href="https://x.com/sidriff" target="_blank" rel="noopener noreferrer">— @sidriff</a>
             </p>
 
@@ -1362,17 +1362,7 @@
       </div>
     </div>
 
-    <!--
-      Entry: if this window is the X OAuth popup callback (?code=…), hand the
-      code to the opener and exit — never load the game. Otherwise boot the
-      leaderboard (title shell) and the deferred game entry.
-    -->
-    <script type="module">
-      import { handleOAuthPopupCallback } from '/src/social/oauth-popup.js';
-      if (!handleOAuthPopupCallback()) {
-        import('/src/social/boot.js');
-        import('/src/main.js');
-      }
-    </script>
+    <!-- Real file entry — avoids Vite's fragile inline html-proxy modules. -->
+    <script type="module" src="/src/entry.js"></script>
   </body>
 </html>
