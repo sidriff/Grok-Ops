@@ -193,8 +193,8 @@ export class MatchBar {
       }
       this.allies.title =
         alive === 0
-          ? 'Squad wiped · 1× score mult'
-          : `${alive}/3 allies up · ${alive}× score mult`;
+          ? 'Squad wiped · end score ×1'
+          : `${alive}/3 allies up · end score ×${alive}`;
     }
 
     const score = s.score ?? s.scoreUs ?? 0;

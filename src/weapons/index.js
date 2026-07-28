@@ -787,8 +787,12 @@ export class WeaponSystem {
     st.lowReady = player?.state === 'mantle' || player?.mantling === true;
     st.empty = s.mag === 0 && !s.chambered;
 
-    // Hide the first-person rig while the death cam is up (third-person body).
-    if (this.viewmodel?.anchor) this.viewmodel.anchor.visible = !playerDead;
+    // Hide the first-person rig on death cam and while the title orbit owns the
+    // world camera (otherwise the gun sits in the corner of a third-person vista).
+    const titleOrbit = (ctx.engine ?? this.ctx?.engine)?.titleOrbit?.active === true;
+    if (this.viewmodel?.anchor) {
+      this.viewmodel.anchor.visible = !playerDead && !titleOrbit;
+    }
 
     // ---- input -----------------------------------------------------------
     if (live) {

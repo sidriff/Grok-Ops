@@ -107,6 +107,7 @@ const [
   { UiSystem },
   { AudioSystem },
   { GameSystem },
+  { TitleOrbitSystem },
   { installShotApi },
   { prewarm },
 ] = await Promise.all([
@@ -123,6 +124,7 @@ const [
   import('./ui/index.js'),
   import('./audio/index.js'),
   import('./game/index.js'),
+  import('./core/titleOrbit.js'),
   import('./dev/shots.js'),
   import('./core/prewarm.js'),
 ]);
@@ -152,7 +154,8 @@ engine
   .add(AiSystem)
   .add(UiSystem)
   .add(AudioSystem)
-  .add(GameSystem);
+  .add(GameSystem)
+  .add(TitleOrbitSystem);
 
 // Init covers ~8–72% of the bar; prewarm takes the rest. Labels come from stage ids.
 const INIT_LO = 0.08;
@@ -316,7 +319,11 @@ if (!skipMenu) {
   // ambush they cannot shoot (debugMode === 'idle' blocks live fire).
   engine.ctx.peek('ai')?.clearStage?.();
   engine.ctx.peek('weapons')?.clearDebugPose?.();
+  // Payoff: keep the already-warm street camera under the title panel.
+  // Do NOT snap to a new overlook — that recompiles and hitch-locks the menu.
+  engine.titleOrbit?.start?.({ lockStreet: false });
   await load.waitForDeploy();
+  engine.titleOrbit?.stop?.();
   engine.ctx.peek('ai')?.clearStage?.();
   engine.ctx.peek('weapons')?.clearDebugPose?.();
   engine.time.scale = 1;

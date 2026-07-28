@@ -144,7 +144,7 @@ export class UiSystem {
       baseSpread: 5.5,
       scoreUs: 0,
       scoreThem: 0,
-      /** Running survival score (time + combat) × ally mult. */
+      /** Running survival score (time + combat); ally mult applied at end only. */
       score: 0,
       combatPoints: 0,
       timeLeft: 300,
@@ -554,8 +554,13 @@ export class UiSystem {
       meta: q ? `${String(q).toUpperCase()} · ready` : undefined,
     });
 
-    // One-shot: Deploy → new survival run (no second prewarm).
-    void boot.waitForDeploy().then(async () => {
+    // One-shot: street vista (prewarmed pose) → Deploy → new run (no prewarm).
+    void (async () => {
+      // Retreat can leave the cam mid-death or indoors — snap to the street
+      // pose prewarm already compiled, not a high overlook.
+      this.ctx.engine?.titleOrbit?.start?.({ lockStreet: true });
+      await boot.waitForDeploy();
+      this.ctx.engine?.titleOrbit?.stop?.();
       this.ctx.peek('ai')?.clearStage?.();
       this.ctx.peek('weapons')?.clearDebugPose?.();
       this.ctx.peek('game')?.restart?.({ capture: false });
@@ -565,7 +570,7 @@ export class UiSystem {
       this.setHudVisible(true);
       await boot.enterPlaying?.({ immediate: false });
       input?.capturePointerForGame?.({ lock: true });
-    });
+    })();
   }
 
   /**

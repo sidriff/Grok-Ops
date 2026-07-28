@@ -32,9 +32,22 @@
         transition: opacity 0.55s ease, background 0.7s ease, backdrop-filter 0.7s ease;
         will-change: opacity;
       }
+      /* Ready / pause: let the live canvas (title orbit or frozen match) show through. */
       #boot.boot-ready {
-        background: linear-gradient(105deg, rgba(4, 6, 8, 0.88) 0%, rgba(4, 6, 8, 0.62) 48%, rgba(4, 6, 8, 0.28) 100%);
-        backdrop-filter: blur(8px) saturate(0.75) brightness(0.85);
+        background: linear-gradient(105deg, rgba(4, 6, 8, 0.9) 0%, rgba(4, 6, 8, 0.55) 46%, rgba(4, 6, 8, 0.14) 100%);
+        backdrop-filter: blur(2px) saturate(0.92) brightness(0.94);
+      }
+      #boot.boot-ready .boot-sky,
+      #boot.boot-ready .boot-horizon,
+      #boot.boot-ready .boot-sil,
+      #boot.boot-ready .boot-dust,
+      #boot.boot-ready .boot-scan,
+      #boot.boot-ready .boot-sweep {
+        opacity: 0;
+        animation: none;
+      }
+      #boot.boot-ready .boot-vignette {
+        opacity: 0.55;
       }
       #boot.boot-gone {
         opacity: 0;

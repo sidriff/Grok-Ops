@@ -167,12 +167,14 @@ export class GameSystem {
     console.info('[game] parked to menu');
   }
 
-  /** Live board score: (time survived + combat pts) × allies still up (min 1×). */
+  /**
+   * In-match board score: survival seconds + combat points only.
+   * Ally mult is applied only on the end screen so a mid-run death does not
+   * yank the HUD number down when the squad is wiped with you.
+   */
   _liveScore() {
-    const alliesAlive = this._countAlive(0);
-    const allyMult = Math.max(1, Math.min(3, alliesAlive));
     const t = Math.floor(Math.min(this.duration, this.elapsed));
-    return (t + (this.combatPoints | 0)) * allyMult;
+    return t + (this.combatPoints | 0);
   }
 
   getHudSnapshot() {
