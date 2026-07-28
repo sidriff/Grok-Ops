@@ -804,7 +804,7 @@ export class UiSystem {
     this.crosshair.update(dt, s);
     this.hit.update(dt);
     this.arcs.update(dt, rx, rz, fx, fz);
-    this.health.update(dt, s);
+    this.health.update(dt, s, rawDt);
     this.ammo.update(dt, s);
     this.killfeed.update(dt);
     this.matchBar.update(s);

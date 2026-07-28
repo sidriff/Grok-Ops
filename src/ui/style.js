@@ -189,10 +189,59 @@ const CSS = `
    the ammo block: bottom-left of the safe area, labelled, with a numeric
    readout and a genuinely dark track so the empty part of the bar is legible
    over sunlit gravel. Armour is a visually distinct second row — thinner,
-   cyan, plate-segmented — so it can never be mistaken for health. */
+   cyan, plate-segmented — so it can never be mistaken for health. FPS sits
+   above Health: bright tier colour + neon seat so it stays legible on sand. */
 .ow-vitals {
   position:absolute; left:var(--pad); bottom:var(--pad);
   width: calc(196px * var(--k));
+}
+.ow-fps {
+  display:flex; align-items:baseline; gap: calc(var(--u) * 1.2);
+  margin-bottom: calc(var(--u) * 2.2);
+  line-height: 1;
+}
+.ow-fps-val {
+  font-family: var(--fd); font-size: calc(20px * var(--k)); font-weight:700;
+  letter-spacing: .04em; font-variant-numeric: tabular-nums;
+  will-change: color, text-shadow;
+}
+.ow-fps-lbl {
+  font-size: calc(9px * var(--k)); letter-spacing: .28em; font-weight:700;
+  text-transform: uppercase;
+}
+/* Lime / amber / red tiers — heavy outline + coloured bloom for “debug neon” pop */
+.ow-fps.hi .ow-fps-val {
+  color: #b8ff5c;
+  text-shadow:
+    var(--o1),
+    0 0 calc(10px * var(--k)) rgba(140, 255, 60, .95),
+    0 0 calc(22px * var(--k)) rgba(90, 220, 40, .55);
+}
+.ow-fps.hi .ow-fps-lbl {
+  color: rgba(180, 255, 110, .78);
+  text-shadow: var(--sh-o1), 0 0 calc(8px * var(--k)) rgba(120, 255, 70, .45);
+}
+.ow-fps.mid .ow-fps-val {
+  color: #ffd24a;
+  text-shadow:
+    var(--o1),
+    0 0 calc(10px * var(--k)) rgba(255, 190, 40, .95),
+    0 0 calc(22px * var(--k)) rgba(255, 150, 20, .5);
+}
+.ow-fps.mid .ow-fps-lbl {
+  color: rgba(255, 200, 80, .78);
+  text-shadow: var(--sh-o1), 0 0 calc(8px * var(--k)) rgba(255, 170, 40, .4);
+}
+.ow-fps.lo .ow-fps-val {
+  color: #ff5a4a;
+  text-shadow:
+    var(--o1),
+    0 0 calc(10px * var(--k)) rgba(255, 70, 50, .95),
+    0 0 calc(22px * var(--k)) rgba(255, 40, 30, .55);
+}
+.ow-fps.lo .ow-fps-lbl {
+  color: rgba(255, 120, 100, .82);
+  text-shadow: var(--sh-o1), 0 0 calc(8px * var(--k)) rgba(255, 50, 40, .45);
 }
 .ow-vt-head {
   display:flex; align-items:baseline; justify-content:space-between;

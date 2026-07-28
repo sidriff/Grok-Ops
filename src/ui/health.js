@@ -35,6 +35,10 @@ export class HealthFx {
 
     // ---- vitals widget ----------------------------------------------------
     this.vitals = el('div', 'ow-vitals', chrome);
+    // FPS sits above Health — wall-clock frame rate, colour-tiered by headroom.
+    this.fpsRow = el('div', 'ow-fps hi', this.vitals);
+    this.fpsVal = el('b', 'ow-fps-val', this.fpsRow, '—');
+    el('span', 'ow-fps-lbl', this.fpsRow, 'FPS');
     const head = el('div', 'ow-vt-head', this.vitals);
     el('div', 'ow-vt-lbl', head, 'Health');
     this.hpNum = el('div', 'ow-vt-num', head);
@@ -63,6 +67,11 @@ export class HealthFx {
     this.armourShown = 0;
     this._lastBeat = 0;
     this.onBeat = null; // set by index for the audio cue
+    /** EMA of frames/sec (wall clock). */
+    this._fpsEma = 0;
+    this._fpsAcc = 0;
+    this._lastFpsText = '';
+    this._lastFpsTier = 'hi';
 
     setStyle(this.bloodWrap, 'opacity', '0');
     setStyle(this.desat, 'display', 'none');
@@ -79,8 +88,14 @@ export class HealthFx {
     this.regenT = 0;
   }
 
-  /** @param {object} s { health, maxHealth, armour, maxArmour, regen:bool } */
-  update(dt, s) {
+  /**
+   * @param {number} dt  simulation dt (scaled)
+   * @param {object} s { health, maxHealth, armour, maxArmour, regen:bool }
+   * @param {number} [rawDt] wall-clock frame delta for the FPS readout
+   */
+  update(dt, s, rawDt = dt) {
+    this._tickFps(rawDt);
+
     const h = clamp01((s.health ?? 100) / (s.maxHealth || 100));
     const targetHurt = clamp01((0.78 - h) / 0.78) ** 1.3;
     this.hurt = damp(this.hurt, targetHurt, 7, dt);
@@ -165,6 +180,33 @@ export class HealthFx {
         setStyle(this.plates[i], 'transform', `scaleX(${f.toFixed(3)})`);
         setStyle(this.plates[i], 'opacity', f > 0.001 ? '1' : '0');
       }
+    }
+  }
+
+  /**
+   * Smooth wall-clock FPS; refresh the numeral ~8 Hz so it stays readable.
+   * Tier: hi ≥55 (lime), mid ≥30 (amber), lo (hot red).
+   */
+  _tickFps(rawDt) {
+    const d = Math.max(1e-4, Math.min(0.25, rawDt || 0));
+    const inst = 1 / d;
+    this._fpsEma = this._fpsEma > 0 ? this._fpsEma + (inst - this._fpsEma) * Math.min(1, d * 5) : inst;
+    this._fpsAcc += d;
+    if (this._fpsAcc < 0.12) return;
+    this._fpsAcc = 0;
+
+    const n = Math.round(this._fpsEma);
+    const text = String(n);
+    if (text !== this._lastFpsText) {
+      this._lastFpsText = text;
+      setText(this.fpsVal, text);
+    }
+    const tier = n >= 55 ? 'hi' : n >= 30 ? 'mid' : 'lo';
+    if (tier !== this._lastFpsTier) {
+      setClass(this.fpsRow, 'hi', tier === 'hi');
+      setClass(this.fpsRow, 'mid', tier === 'mid');
+      setClass(this.fpsRow, 'lo', tier === 'lo');
+      this._lastFpsTier = tier;
     }
   }
 
