@@ -105,10 +105,12 @@ export class Ballistics {
         hit.body.applyImpulse(dx * j, dy * j, dz * j, hit.point.x, hit.point.y, hit.point.z);
       }
       if (hit.ragdoll) {
+        // Soft corpse hits — full damage * 0.9 used to re-explode settled dolls.
+        const j = Math.min(2.2, damage * 0.35);
         hit.ragdoll.applyImpulse(
           hit.point.x, hit.point.y, hit.point.z,
-          dx * damage * 0.9, dy * damage * 0.9, dz * damage * 0.9,
-          0.35
+          dx * j, dy * j, dz * j,
+          0.55
         );
       }
 

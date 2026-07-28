@@ -22,6 +22,8 @@
  *                                                    the local player's death cam)
  *   ai.removeCorpse(agent)                 dispose a player corpse early
  *   ai.agents                              live Agent list
+ *   Dead combatants despawn after CORPSE_LIFETIME (~30s); player death-cam
+ *   corpses stay until removeCorpse / respawn.
  *   ai.debugStage('firefight'|'none')      staged combat tableau for captures;
  *                                          'none' MUST tear it down (prewarm)
  *   ai.clearStage()                        remove every staged agent
@@ -51,6 +53,9 @@ import { NavGrid, CoverMap } from './nav.js';
 import { Agent, STATE } from './agent.js';
 import { Squad } from './squad.js';
 import { GroundShadows } from './grounding.js';
+
+/** Seconds a combat corpse stays on the floor before despawn. */
+const CORPSE_LIFETIME = 30;
 
 export class AiSystem {
   static id = 'ai';
@@ -964,10 +969,10 @@ export class AiSystem {
         if (a.alive) {
           alive++;
           a.wantFire = false;
-        } else if (a.deadTime !== undefined) {
-          a.deadTime += dt;
         }
       }
+      // Corpses still age out so the score screen doesn't keep a dozen dolls.
+      this._ageAndCullCorpses(dt);
       this.stats.agents = this.agents.length;
       this.stats.alive = alive;
       return;
@@ -982,22 +987,49 @@ export class AiSystem {
         if (a.staged) this._updateStaged(a, dt);
         else a.update(dt, ctx);
         alive++;
-      } else if (a.deadTime !== undefined) {
-        a.deadTime += dt;
-        if (this.debugLog && a.ragdoll && !a._loggedDoll && a.deadTime > 1.2) {
-          a._loggedDoll = true;
-          const b = a.ragdoll.aabb;
-          console.info(
-            `[ai] ragdoll ${a.id} settled: ${(b.maxx - b.minx).toFixed(2)} x ` +
-              `${(b.maxy - b.miny).toFixed(2)} x ${(b.maxz - b.minz).toFixed(2)} m ` +
-              `at y=${b.miny.toFixed(2)} sleeping=${a.ragdoll.sleeping}`
-          );
-        }
       }
     }
+    this._ageAndCullCorpses(dt);
     this._updateGrenades(dt);
     this.stats.agents = this.agents.length;
     this.stats.alive = alive;
+  }
+
+  /**
+   * Advance deadTime on corpses and despawn any past CORPSE_LIFETIME.
+   * Player death-cam bodies are left for removeCorpse / respawn.
+   */
+  _ageAndCullCorpses(dt) {
+    if (dt <= 0) return;
+    let cull = null;
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
+      if (a.alive || a.deadTime === undefined) continue;
+      a.deadTime += dt;
+      if (this.debugLog && a.ragdoll && !a._loggedDoll && a.deadTime > 1.2) {
+        a._loggedDoll = true;
+        const b = a.ragdoll.aabb;
+        console.info(
+          `[ai] ragdoll ${a.id} settled: ${(b.maxx - b.minx).toFixed(2)} x ` +
+            `${(b.maxy - b.miny).toFixed(2)} x ${(b.maxz - b.minz).toFixed(2)} m ` +
+            `at y=${b.miny.toFixed(2)} sleeping=${a.ragdoll.sleeping}`
+        );
+      }
+      if (!a.isPlayerCorpse && a.deadTime >= CORPSE_LIFETIME) {
+        (cull || (cull = [])).push(i);
+      }
+    }
+    if (!cull) return;
+    for (let k = cull.length - 1; k >= 0; k--) {
+      const i = cull[k];
+      const a = this.agents[i];
+      this.agents.splice(i, 1);
+      try {
+        a.dispose?.();
+      } catch {
+        /* ignore dispose races */
+      }
+    }
   }
 
   lateUpdate() {

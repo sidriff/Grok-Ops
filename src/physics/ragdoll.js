@@ -70,9 +70,17 @@ export function humanoidSpec(height = 1.8, scaleMass = 82) {
 
 /* ------------------------------------------------------------------ */
 
-const MAX_PARTICLE_STEP = 0.35; // metres per fixed step, anti-explosion clamp
-const SLEEP_MOTION = 0.0022;
-const SLEEP_TIME = 0.6;
+/** Max particle displacement per fixed step (~10 m/s). Lower = less thrash. */
+const MAX_PARTICLE_STEP = 0.085;
+const SLEEP_MOTION = 0.0028;
+const SLEEP_TIME = 0.45;
+/**
+ * Floor mass used when applying impulses so hands/fingers never take the full
+ * kick (invMass of a 0.5 kg hand would launch them through the ceiling).
+ */
+const IMPULSE_MASS_FLOOR = 3.5;
+/** Max Verlet previous-pos kick from one impulse (m) ≈ 6 m/s at 120 Hz. */
+const MAX_IMPULSE_KICK = 0.05;
 
 let _nextRagdollId = 1;
 
@@ -84,21 +92,25 @@ export class Ragdoll {
    *   transform  THREE.Matrix4 placing the spec into world space
    *   gravity    m/s^2 (negative)
    *   iterations Gauss-Seidel iterations per fixed step
+   *   damping    per-step linear velocity retain (lower = heavier / stickier)
+   *   massScale  multiplies every bone mass (heavier body, softer hits)
    */
   constructor(world, opts = {}) {
     this.id = _nextRagdollId++;
     this.world = world;
     this.gravity = opts.gravity ?? -20.6;
-    this.iterations = opts.iterations ?? 6;
+    this.iterations = opts.iterations ?? 8;
     this.mask = opts.mask ?? MASK.DEBRIS;
-    this.linearDamping = opts.damping ?? 0.985;
-    this.friction = opts.friction ?? 0.72;
+    // 0.965^120 ≈ 1.4% velocity left after 1 s — bodies settle instead of thrash.
+    this.linearDamping = opts.damping ?? 0.965;
+    this.friction = opts.friction ?? 0.9;
     this.userData = opts.userData ?? null;
     this.actor = opts.actor ?? null;
     this.alive = true;
     this.sleeping = false;
     this.sleepTimer = 0;
     this.age = 0;
+    const massScale = opts.massScale ?? 1.35;
 
     const spec = opts.bones ?? humanoidSpec(opts.height ?? 1.8, opts.mass ?? 82);
     this.spec = spec;
@@ -106,9 +118,14 @@ export class Ragdoll {
     this.boneCount = nb;
 
     // --- particle set with shared joints ---
+    // Endpoints that land on the same millimetre weld into one particle. That
+    // weld is the only thing holding limbs on the torso — without it cone
+    // limits only *aim* free chains and the mesh turns to mush.
     const px = [], py = [], pz = [], pm = [];
     const key = (x, y, z) =>
-      `${Math.round(x * 1000)},${Math.round(y * 1000)},${Math.round(z * 1000)}`;
+      `${(x * 1000 + (x >= 0 ? 0.5 : -0.5)) | 0},` +
+      `${(y * 1000 + (y >= 0 ? 0.5 : -0.5)) | 0},` +
+      `${(z * 1000 + (z >= 0 ? 0.5 : -0.5)) | 0}`;
     const map = new Map();
     const mat = opts.transform ?? null;
     const _v = new THREE.Vector3();
@@ -119,7 +136,11 @@ export class Ragdoll {
       let i = map.get(k);
       if (i === undefined) {
         i = px.length;
-        px.push(_v.x); py.push(_v.y); pz.push(_v.z); pm.push(0);
+        // Snap stored position to the key grid so later near-hits weld cleanly.
+        const gx = (( _v.x * 1000 + (_v.x >= 0 ? 0.5 : -0.5)) | 0) / 1000;
+        const gy = (( _v.y * 1000 + (_v.y >= 0 ? 0.5 : -0.5)) | 0) / 1000;
+        const gz = (( _v.z * 1000 + (_v.z >= 0 ? 0.5 : -0.5)) | 0) / 1000;
+        px.push(gx); py.push(gy); pz.push(gz); pm.push(0);
         map.set(k, i);
       }
       return i;
@@ -143,7 +164,8 @@ export class Ragdoll {
       this.boneHead[i] = a;
       this.boneTail[i] = c;
       this.boneRadius[i] = s.radius ?? 0.06;
-      this.boneMass[i] = s.mass ?? 4;
+      // Floor extremity mass so light hands don't dominate the thrash budget.
+      this.boneMass[i] = Math.max(0.8, (s.mass ?? 4) * massScale);
       this.boneParent[i] = s.parent ?? -1;
       this.boneCone[i] = s.cone ?? 70 * DEG;
       this.boneTwist[i] = s.twist ?? 40 * DEG;
@@ -245,17 +267,29 @@ export class Ragdoll {
   /**
    * Kick the doll at a world point — the killing shot, an explosion, a melee.
    * Falloff is 1/(1+d^2) so a headshot snaps the head without teleporting the
-   * whole body.
+   * whole body. Light extremities use a mass floor so they don't whip.
    */
   applyImpulse(x, y, z, ix, iy, iz, radius = 0.45, dt = 1 / 120) {
+    const maxKick = MAX_IMPULSE_KICK;
+    const imCap = 1 / IMPULSE_MASS_FLOOR;
     for (let i = 0; i < this.particleCount; i++) {
+      if (this.invMass[i] === 0) continue;
       const dx = this.px[i] - x, dy = this.py[i] - y, dz = this.pz[i] - z;
       const d2 = dx * dx + dy * dy + dz * dz;
       const w = 1 / (1 + d2 / (radius * radius));
-      const im = this.invMass[i];
-      this.qx[i] -= ix * im * w * dt;
-      this.qy[i] -= iy * im * w * dt;
-      this.qz[i] -= iz * im * w * dt;
+      // Cap invMass so hands/fingers take a torso-like share of the hit.
+      const im = Math.min(this.invMass[i], imCap);
+      let kx = ix * im * w * dt;
+      let ky = iy * im * w * dt;
+      let kz = iz * im * w * dt;
+      const kl = Math.hypot(kx, ky, kz);
+      if (kl > maxKick) {
+        const s = maxKick / kl;
+        kx *= s; ky *= s; kz *= s;
+      }
+      this.qx[i] -= kx;
+      this.qy[i] -= ky;
+      this.qz[i] -= kz;
     }
     this.wake();
   }
@@ -399,8 +433,8 @@ export class Ragdoll {
       const ty = ay * ca + cross_y * sa + ky * kdot * (1 - ca);
       const tz = az * ca + cross_z * sa + kz * kdot * (1 - ca);
 
-      // desired tail position, blended for stability
-      const stiff = 0.65;
+      // Soft cone correction — stiff limits fight contacts and thrash limbs.
+      const stiff = 0.4;
       const gx = this.px[a] + tx * bl;
       const gy = this.py[a] + ty * bl;
       const gz = this.pz[a] + tz * bl;
@@ -457,7 +491,9 @@ export class Ragdoll {
       }
       const pl = Math.hypot(pushx, pushy, pushz);
       if (pl < 1e-6) continue;
-      const cap = 0.2;
+      // Soft contact push — hard depenetration launches limbs when a capsule
+      // starts slightly buried (death pose / floor).
+      const cap = 0.1;
       if (pl > cap) {
         const s = cap / pl;
         pushx *= s; pushy *= s; pushz *= s;
@@ -504,7 +540,7 @@ export class Ragdoll {
       } else {
         nx = 0; ny = 1; nz = 0;
       }
-      const push = (rad - d) * 0.5;
+      const push = (rad - d) * 0.32;
       const s = cl.s, t = cl.t;
       const wa0 = this.invMass[a0] * (1 - s), wa1 = this.invMass[a1] * s;
       const wb0 = this.invMass[b0] * (1 - t), wb1 = this.invMass[b1] * t;
@@ -665,7 +701,7 @@ export class Ragdoll {
   /** Push the simulated transforms into the adopted skeleton. */
   writeToSkeleton() {
     if (!this.bones3D) return;
-    // A settled corpse re-derives 25 bone transforms per frame from particle
+    // A settled corpse re-derives bone transforms per frame from particle
     // positions that `step()` has already stopped touching (it early-returns on
     // `sleeping`), so every one of those writes is the same value it wrote last
     // frame. Skip them — but only AFTER one write has landed while asleep: the
@@ -683,15 +719,31 @@ export class Ragdoll {
       this.getBoneTransform(i, pos, quat);
       this._m4b.compose(pos, quat, this._scale);
       if (bone.parent) {
+        // Parent scale must stay unit or inv(parent)*world injects stretch into
+        // every child (classic Slender Man). Clamp before reading world matrix.
+        if (
+          bone.parent.scale.x !== 1 ||
+          bone.parent.scale.y !== 1 ||
+          bone.parent.scale.z !== 1
+        ) {
+          bone.parent.scale.set(1, 1, 1);
+          bone.parent.updateMatrix();
+        }
         bone.parent.updateWorldMatrix(true, false);
         this._m4.copy(bone.parent.matrixWorld).invert().multiply(this._m4b);
       } else {
         this._m4.copy(this._m4b);
       }
       this._m4.decompose(bone.position, bone.quaternion, this._v3b);
+      // Never keep decomposed scale — float error + non-uniform parents accumulate
+      // into limb stretch within a second of death.
+      bone.scale.set(1, 1, 1);
       bone.updateMatrix();
     }
-    this.bones3D[0]?.updateMatrixWorld(true);
+    // Prefer the pelvis / first mapped bone so the full hierarchy refreshes.
+    const root =
+      this.bones3D.find((b) => b && !b.parent?.isBone) ?? this.bones3D.find(Boolean);
+    root?.updateMatrixWorld(true);
   }
 
   dispose() {
@@ -702,54 +754,104 @@ export class Ragdoll {
 }
 
 /**
- * Build a bone spec from an existing THREE.Skeleton by walking parent/child
- * links. Bones with no children get a short stub along their local +Y.
+ * Build a bone spec from an existing THREE.Skeleton.
+ *
+ * One capsule per parent→child edge, with endpoints at the joint world
+ * positions. That way every joint is a *shared particle* (same world point at
+ * construction → same Verlet particle), so limbs cannot float off the torso.
+ * Branch points (hips, shoulders) get free cones — a spine-up parent direction
+ * is ~90° from a thigh and would otherwise fight the bind pose every step.
+ *
  * Returns { spec, boneMap } ready for `new Ragdoll(...).adoptSkeleton(...)`.
  */
 export function specFromSkeleton(skeleton, opts = {}) {
   const bones = skeleton.bones;
   const spec = [];
   const boneMap = [];
-  const indexOf = new Map();
-  const v = new THREE.Vector3();
-  const v2 = new THREE.Vector3();
   const totalMass = opts.mass ?? 82;
+  const defaultCone = (opts.cone ?? 70) * DEG;
+  const defaultTwist = (opts.twist ?? 35) * DEG;
+  const freeCone = Math.PI - 1e-3;
 
-  for (let i = 0; i < bones.length; i++) indexOf.set(bones[i], i);
-
-  const specIndexOfBone = new Map();
+  const worldPos = new Map();
   for (let i = 0; i < bones.length; i++) {
     const bone = bones[i];
     bone.updateWorldMatrix(true, false);
-    v.setFromMatrixPosition(bone.matrixWorld);
-    const childBone = bone.children.find((c) => c.isBone);
-    if (childBone) {
-      childBone.updateWorldMatrix(true, false);
-      v2.setFromMatrixPosition(childBone.matrixWorld);
+    const e = bone.matrixWorld.elements;
+    worldPos.set(bone, [e[12], e[13], e[14]]);
+  }
+
+  // First structural child of a bone (prefer spine/neck over limbs at branches).
+  const primaryChild = (bone) => {
+    const kids = bone.children.filter((c) => c.isBone);
+    if (!kids.length) return null;
+    const structural = kids.find((c) => !/clavicle|upleg|upperarm|shoulder|thigh/i.test(c.name));
+    return structural ?? kids[0];
+  };
+
+  /** Spec index of the capsule whose *tail* is this joint (drives this bone). */
+  const specAtJoint = new Map();
+
+  for (let i = 0; i < bones.length; i++) {
+    const bone = bones[i];
+    const parent = bone.parent?.isBone ? bone.parent : null;
+    let head;
+    let tail;
+    let parentSpec = -1;
+    let cone = defaultCone;
+
+    if (!parent) {
+      // Root: capsule from root joint to primary child (or short stub).
+      head = worldPos.get(bone);
+      const child = primaryChild(bone);
+      if (child) {
+        tail = worldPos.get(child);
+      } else {
+        const q = new THREE.Quaternion();
+        bone.getWorldQuaternion(q);
+        const dir = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+        const stub = opts.stubLength ?? 0.08;
+        tail = [head[0] + dir.x * stub, head[1] + dir.y * stub, head[2] + dir.z * stub];
+      }
     } else {
-      v2.copy(v).addScaledVector(
-        new THREE.Vector3(0, 1, 0).applyQuaternion(bone.getWorldQuaternion(new THREE.Quaternion())),
-        opts.stubLength ?? 0.08
-      );
+      head = worldPos.get(parent);
+      tail = worldPos.get(bone);
+      parentSpec = specAtJoint.has(parent) ? specAtJoint.get(parent) : -1;
+      // Branch off a chain (leg from hips, arm from spine): free cone so the
+      // solver doesn't yank the limb toward the parent's long axis.
+      const siblings = parent.children.filter((c) => c.isBone);
+      if (siblings.length > 1 && primaryChild(parent) !== bone) {
+        cone = freeCone;
+      }
     }
-    const len = v.distanceTo(v2);
+
+    const dx = tail[0] - head[0];
+    const dy = tail[1] - head[1];
+    const dz = tail[2] - head[2];
+    const len = Math.hypot(dx, dy, dz);
     if (len < 1e-4) continue;
+
     const si = spec.length;
-    specIndexOfBone.set(bone, si);
-    const parentSpec =
-      bone.parent && specIndexOfBone.has(bone.parent) ? specIndexOfBone.get(bone.parent) : -1;
+    // Tail joint is this bone's origin (or primary child for the root capsule).
+    if (!parent) {
+      specAtJoint.set(bone, si);
+    } else {
+      specAtJoint.set(bone, si);
+    }
+
     spec.push({
       name: bone.name || `bone${i}`,
-      head: [v.x, v.y, v.z],
-      tail: [v2.x, v2.y, v2.z],
+      head: [head[0], head[1], head[2]],
+      tail: [tail[0], tail[1], tail[2]],
       radius: Math.max(0.025, len * (opts.radiusRatio ?? 0.32)),
       mass: 1,
       parent: parentSpec,
-      cone: (opts.cone ?? 70) * DEG,
-      twist: (opts.twist ?? 35) * DEG,
+      cone,
+      twist: defaultTwist,
     });
     boneMap[si] = bone;
   }
+
   // distribute mass by bone volume
   let vol = 0;
   for (const s of spec) {

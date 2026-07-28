@@ -776,9 +776,15 @@ export class PhysicsSystem {
       if (d > radius) continue;
       _v.set(cx, cy, cz);
       if (!this.lineOfSight(pos, _v, MASK.EXPLOSION)) continue;
-      const f = (1 - d / radius) * strength * 0.5;
+      // Softer than rigid debris — ragdoll impulse path already mass-floors
+      // extremities; still keep the kick modest so dolls don't thrash.
+      const f = (1 - d / radius) * strength * 0.28;
       const inv = 1 / (d || 1e-4);
-      rd.applyImpulse(pos.x, pos.y, pos.z, dx * inv * f, dy * inv * f + f * 0.4, dz * inv * f, radius);
+      rd.applyImpulse(
+        pos.x, pos.y, pos.z,
+        dx * inv * f, dy * inv * f + f * 0.25, dz * inv * f,
+        Math.min(radius, 1.2)
+      );
     }
   }
 

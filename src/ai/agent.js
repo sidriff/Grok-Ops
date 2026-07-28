@@ -1212,14 +1212,13 @@ export class Agent {
     for (const c of this.colliders) this.phys?.removeCollider(c);
     this.colliders.length = 0;
 
-    // Impulse is N·s, and the ragdoll turns it into a velocity change on the
-    // particles it lands near: a 5.56 round carries ~4 N·s, so anything in the
-    // hundreds launches the body across the street instead of dropping it.
+    // Impulse is N·s. Keep it modest — the solver is heavy/damped now; big
+    // kicks still read as a hit without launching limbs into orbit.
     this.group.updateMatrixWorld(true);
     const impulse = this._v2
       .copy(dir ?? this._v.set(0, 0, 1))
       .normalize()
-      .multiplyScalar(Math.min(5.5, 1.5 + amount * 0.02));
+      .multiplyScalar(Math.min(2.8, 0.9 + amount * 0.012));
     const hitPoint = point ?? this._v.copy(this.position).setY(this.position.y + 1.2);
 
     // Own the hand-off: build the capsule spec from the *live* animated pose,
@@ -1241,10 +1240,68 @@ export class Agent {
   }
 
   /**
-   * Hand the live pose to the ragdoll solver. `physics` derives the capsule
-   * chain from the skeleton itself, so the doll starts exactly in the pose the
-   * animator left — the death has no pop. `radiusRatio` fattens the capsules
-   * (its default is thin enough that a settled body reads as a pancake).
+   * Build the DOLL capsule chain from the live animated pose.
+   *
+   * Critical: shoulder/hip stubs share particles with the torso so limbs stay
+   * welded. The generic skeleton walk creates a free particle per branch and
+   * the body turns into mush / Slender Man as limbs drift from the trunk.
+   */
+  _dollFromPose() {
+    const skel = this.skeleton;
+    const byName = new Map();
+    for (let i = 0; i < skel.bones.length; i++) {
+      const b = skel.bones[i];
+      byName.set(b.name, b);
+      b.updateWorldMatrix(true, false);
+    }
+    const worldOf = (name) => {
+      const b = byName.get(name);
+      if (!b) return null;
+      const e = b.matrixWorld.elements;
+      return [e[12], e[13], e[14]];
+    };
+
+    const spec = [];
+    const boneMap = [];
+    /** DOLL row index → compact spec index (skips remap parents correctly). */
+    const rowToSpec = new Int32Array(DOLL.length).fill(-1);
+    const s = this.scale || 1;
+    for (let i = 0; i < DOLL.length; i++) {
+      const [headName, tailName, radius, massFrac, parent, cone, twist, mapped] =
+        DOLL[i];
+      const head = worldOf(headName);
+      const tail = worldOf(tailName);
+      if (!head || !tail) {
+        console.warn(`[ai] doll missing bone ${headName}→${tailName}`);
+        continue;
+      }
+      const dx = tail[0] - head[0];
+      const dy = tail[1] - head[1];
+      const dz = tail[2] - head[2];
+      if (dx * dx + dy * dy + dz * dz < 1e-8) continue;
+
+      const si = spec.length;
+      rowToSpec[i] = si;
+      const p = parent >= 0 ? rowToSpec[parent] : -1;
+
+      spec.push({
+        name: mapped ? headName : `${headName}>${tailName}`,
+        head,
+        tail,
+        radius: radius * s,
+        mass: Math.max(0.35, massFrac * this.mass),
+        parent: p,
+        cone: cone * DEG,
+        twist: twist * DEG,
+      });
+      boneMap[si] = mapped ? byName.get(headName) ?? null : null;
+    }
+    return { spec, boneMap };
+  }
+
+  /**
+   * Hand the live pose to the ragdoll solver using the authored DOLL table so
+   * joints share particles. Starts in the animator's last pose — no death pop.
    */
   _makeRagdoll(impulse, point) {
     const phys = this.phys;
@@ -1252,26 +1309,48 @@ export class Agent {
     // Fat capsules that start half-buried in the floor tunnel straight through
     // it: the contact normal flips once a bone's axis is on the far side. Lift
     // the pose clear of the ground for the one frame it takes to build the doll,
-    // then put the group back — the body drops the 15 cm invisibly.
+    // then put the group back — particles stay raised so the body drops ~15 cm.
     const lift = 0.15 * this.scale;
     this.group.position.y += lift;
     this.group.updateMatrixWorld(true);
-    const rd = phys.createRagdollFromSkeleton(this.mesh, {
+
+    const { spec, boneMap } = this._dollFromPose();
+    if (!spec.length) {
+      this.group.position.y -= lift;
+      this.group.updateMatrixWorld(true);
+      return null;
+    }
+
+    const rd = phys.createRagdoll({
+      bones: spec,
+      transform: null,
       actor: this,
-      mass: this.mass,
-      radiusRatio: 0.42,
-      cone: 74,
-      twist: 38,
-      iterations: 8,
-      velocity: { x: this.velocity.x * 0.6, y: 0, z: this.velocity.z * 0.6 },
+      iterations: 10,
+      damping: 0.96,
+      friction: 0.92,
+      massScale: 1.45,
+      velocity: {
+        x: this.velocity.x * 0.3,
+        y: Math.min(0.8, Math.max(0, this.velocity.y) * 0.15),
+        z: this.velocity.z * 0.3,
+      },
     });
+    rd.adoptSkeleton(this.skeleton, boneMap);
+
     this.group.position.y -= lift;
     this.group.updateMatrixWorld(true);
     if (!rd) return null;
     if (impulse && point) {
-      // wide radius: a tight one dumps all of it into whichever light bone is
-      // nearest and whips the limb across the street
-      rd.applyImpulse(point.x, point.y, point.z, impulse.x, impulse.y, impulse.z, 0.85);
+      // Wide, soft radius: spreads the kill shot so no single light bone whips.
+      rd.applyImpulse(
+        point.x,
+        point.y,
+        point.z,
+        impulse.x,
+        impulse.y,
+        impulse.z,
+        1.05
+      );
     }
     if (this.ai.debugLog) {
       console.info(
