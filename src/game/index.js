@@ -6,7 +6,8 @@
  * near the end hostiles refill almost as fast as they drop (cap 12).
  *
  * Player death freezes on the death cam and shows a score/retry screen
- * instead of TDM respawn. Surviving the clock is a win.
+ * instead of TDM respawn. Surviving the clock is a win. If you go down,
+ * the squad goes with you — ally mult does not pad a loss.
  */
 
 import * as THREE from 'three';
@@ -440,6 +441,10 @@ export class GameSystem {
     this.phase = won ? 'won' : 'lost';
     this.timeLeft = won ? 0 : this.timeLeft;
 
+    // Loss (player died): squad dies with you so score cannot keep a 2–3× ally
+    // mult after the operator is down. Win: blues stay up for the mult.
+    if (!won) this._killSquad();
+
     const player = this.ctx.peek('player');
     if (player) {
       player.autoRespawn = false;
@@ -488,6 +493,25 @@ export class GameSystem {
       `[game] ${won ? 'WIN' : 'LOSS'} t=${survived.toFixed(1)}s kills=${this.kills}` +
         ` hs=${this.headshots} pts=${combatPoints} allies=${alliesAlive} score=${score}`
     );
+  }
+
+  /**
+   * Drop every living blue when the player dies. Score is × allies still up,
+   * so leaving them standing after a loss inflated the board.
+   */
+  _killSquad() {
+    const ai = this.ctx.peek('ai');
+    if (!ai?.agents?.length) return;
+    this._v.set(0, -1, 0);
+    for (const a of ai.agents) {
+      if (!a.alive) continue;
+      if (a.team !== 0 || a.isPlayerCorpse || a.isStageProp) continue;
+      try {
+        a.die?.(a.position, this._v, 0);
+      } catch {
+        a.alive = false;
+      }
+    }
   }
 
   _teardownActors() {
