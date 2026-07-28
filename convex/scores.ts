@@ -195,19 +195,21 @@ export const submit = mutation({
   },
 });
 
-// Seeds die early — none past 2:00 so real players can own the board.
+// Seeds all die mid-run — squad wipes with the player, so alliesAlive is always 0.
+// None past ~2:00 so real players can own the board. (Allies only count on a full
+// 5:00 clear; under five minutes with allies up is impossible.)
 const FAKE_OPS = [
   // Don't use real handles (e.g. sidriff) — collisions with live OAuth users.
-  { handle: "si_seed", name: "Si", kills: 14, headshots: 6, time: 118, allies: 2, won: false },
-  { handle: "ghostwire", name: "Ghost", kills: 11, headshots: 3, time: 97, allies: 1, won: false },
-  { handle: "rattlecan", name: "Rattle", kills: 9, headshots: 2, time: 84, allies: 1, won: false },
-  { handle: "lowpoly_dave", name: "Dave", kills: 16, headshots: 7, time: 112, allies: 2, won: false },
+  { handle: "si_seed", name: "Si", kills: 14, headshots: 6, time: 118, allies: 0, won: false },
+  { handle: "ghostwire", name: "Ghost", kills: 11, headshots: 3, time: 97, allies: 0, won: false },
+  { handle: "rattlecan", name: "Rattle", kills: 9, headshots: 2, time: 84, allies: 0, won: false },
+  { handle: "lowpoly_dave", name: "Dave", kills: 16, headshots: 7, time: 112, allies: 0, won: false },
   { handle: "bytebarrel", name: "Byte", kills: 7, headshots: 1, time: 51, allies: 0, won: false },
-  { handle: "haze_runner", name: "Haze", kills: 13, headshots: 5, time: 105, allies: 2, won: false },
+  { handle: "haze_runner", name: "Haze", kills: 13, headshots: 5, time: 105, allies: 0, won: false },
   { handle: "clip_eater", name: "Clip", kills: 5, headshots: 1, time: 38, allies: 0, won: false },
-  { handle: "nullref", name: "Null", kills: 10, headshots: 3, time: 73, allies: 1, won: false },
+  { handle: "nullref", name: "Null", kills: 10, headshots: 3, time: 73, allies: 0, won: false },
   { handle: "ashtrail", name: "Ash", kills: 4, headshots: 0, time: 27, allies: 0, won: false },
-  { handle: "v0x_ops", name: "Vox", kills: 12, headshots: 4, time: 91, allies: 1, won: false },
+  { handle: "v0x_ops", name: "Vox", kills: 12, headshots: 4, time: 91, allies: 0, won: false },
 ] as const;
 
 /**
