@@ -584,6 +584,8 @@ export class UiSystem {
       s.alliesAlive = 3;
       s.score = 0;
       s.combatPoints = 0;
+      // Keep the blob URL alive for the menu link; just hide on this panel.
+      this.death.setLastRun?.(null);
       return;
     }
     s.endgame = true;
@@ -600,6 +602,19 @@ export class UiSystem {
     s.noRespawn = true;
     // Belt-and-suspenders with game._endMatch: show a real cursor for Retry.
     this.ctx.input?.releasePointerForUi?.();
+    // If capture already sealed (or a prior run is still cached), show it now.
+    // game:end also pushes via setLastRun after finalize finishes.
+    const boot = this.menu?.boot;
+    const last = boot?.getLastRun?.() ?? null;
+    if (last) this.death.setLastRun?.(last);
+  }
+
+  /**
+   * Local run capture ready for download (death card + menu share the blob).
+   * @param {{ url: string, name: string, bytes?: number, duration?: number } | null} last
+   */
+  setLastRun(last) {
+    this.death.setLastRun?.(last);
   }
 
   setHudVisible(v) {

@@ -10,8 +10,11 @@
 
 import type * as auth from "../auth.js";
 import type * as http from "../http.js";
+import type * as lib_oauth1 from "../lib/oauth1.js";
+import type * as lib_rateLimit from "../lib/rateLimit.js";
 import type * as lib_score from "../lib/score.js";
 import type * as scores from "../scores.js";
+import type * as twitterOAuth1 from "../twitterOAuth1.js";
 import type * as users from "../users.js";
 
 import type {
@@ -23,8 +26,11 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   http: typeof http;
+  "lib/oauth1": typeof lib_oauth1;
+  "lib/rateLimit": typeof lib_rateLimit;
   "lib/score": typeof lib_score;
   scores: typeof scores;
+  twitterOAuth1: typeof twitterOAuth1;
   users: typeof users;
 }>;
 

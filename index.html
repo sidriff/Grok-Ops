@@ -147,6 +147,78 @@
         padding-left: 1.1rem;
         border-left: 2px solid #ffb02a;
       }
+
+      /* Same 3-col track as .boot-load-grid so the link sits over the board column. */
+      .boot-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(0, 0.85fr);
+        gap: 1.5rem 1.75rem;
+        align-items: start;
+        margin-bottom: 0.15rem;
+      }
+      .boot-head-brand {
+        min-width: 0;
+      }
+      .boot-head-actions {
+        grid-column: 3;
+        justify-self: end;
+        align-self: start;
+        padding-top: 0.05rem;
+      }
+      @media (max-width: 1100px) {
+        .boot-head {
+          grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+        }
+        .boot-head-actions {
+          grid-column: 2;
+        }
+      }
+      @media (max-width: 820px) {
+        .boot-head {
+          grid-template-columns: 1fr;
+        }
+        .boot-head-actions {
+          grid-column: 1;
+          justify-self: start;
+          margin: 0.35rem 0 0.55rem;
+        }
+      }
+
+      .boot-orig-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.48rem 0.78rem 0.48rem 0.72rem;
+        border: 1px solid rgba(255, 176, 42, 0.38);
+        border-radius: 2px;
+        background: rgba(6, 9, 12, 0.72);
+        color: rgba(255, 220, 160, 0.92);
+        font-size: 0.68rem;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        text-decoration: none;
+        backdrop-filter: blur(6px);
+        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+        white-space: nowrap;
+        transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+      }
+      .boot-orig-link:hover {
+        border-color: rgba(255, 176, 42, 0.7);
+        background: rgba(12, 16, 22, 0.88);
+        color: #ffd27a;
+      }
+      .boot-orig-link:focus-visible {
+        outline: 2px solid #ffb02a;
+        outline-offset: 2px;
+      }
+      .boot-orig-link span {
+        opacity: 0.55;
+        letter-spacing: 0.08em;
+        font-weight: 500;
+        text-transform: none;
+      }
+
       .boot-kicker {
         font-size: 0.68rem;
         letter-spacing: 0.34em;
@@ -304,6 +376,48 @@
       }
       .boot-fullscreen-sub {
         display: none;
+      }
+      .boot-cta-opts {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: stretch;
+        gap: 0.4rem;
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .boot-fullscreen.is-disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .boot-last-run {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.55rem 0.85rem;
+        margin-top: 0.55rem;
+        padding: 0.45rem 0.15rem 0;
+        border-top: 1px solid rgba(196, 210, 219, 0.1);
+        font-size: 0.62rem;
+        letter-spacing: 0.1em;
+      }
+      .boot-last-run[hidden] { display: none !important; }
+      .boot-last-run a {
+        color: #ffb02a;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        text-decoration: none;
+        border-bottom: 1px solid rgba(255, 176, 42, 0.35);
+      }
+      .boot-last-run a:hover {
+        color: #ffe0a0;
+        border-bottom-color: rgba(255, 224, 160, 0.55);
+      }
+      .boot-last-run-meta {
+        color: rgba(196, 210, 219, 0.42);
+        font-weight: 500;
+        letter-spacing: 0.06em;
+        text-transform: none;
       }
       @media (min-width: 520px) {
         .boot-fullscreen-sub {
@@ -951,11 +1065,31 @@
         min-width: 0;
         overflow: hidden;
         display: flex;
-        flex-direction: column;
-        gap: 0.05rem;
+        flex-direction: row;
+        align-items: center;
+        gap: 0.4rem;
         text-transform: none;
         letter-spacing: 0.03em;
         color: #eef4f7;
+      }
+      .boot-lb-row-avatar {
+        width: 1.35rem;
+        height: 1.35rem;
+        border-radius: 50%;
+        object-fit: cover;
+        flex: 0 0 auto;
+        border: 1px solid rgba(255, 176, 42, 0.35);
+        background: rgba(8, 12, 18, 0.8);
+      }
+      .boot-lb-row-avatar.is-fallback {
+        border-color: rgba(29, 155, 240, 0.4);
+      }
+      .boot-lb-name-text {
+        min-width: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 0.05rem;
       }
       .boot-lb-primary {
         overflow: hidden;
@@ -1131,9 +1265,24 @@
       <div class="boot-vignette" aria-hidden="true"></div>
 
       <div class="boot-panel">
-        <div class="boot-kicker">Claude of Duty:</div>
-        <h1 class="boot-title">Grok Ops</h1>
-        <div class="boot-sub">Five Minute Survival</div>
+        <div class="boot-head">
+          <div class="boot-head-brand">
+            <div class="boot-kicker">Claude of Duty:</div>
+            <h1 class="boot-title">Grok Ops</h1>
+            <div class="boot-sub">Five Minute Survival</div>
+          </div>
+          <div class="boot-head-actions">
+            <a
+              class="boot-orig-link"
+              href="https://claude-of-duty-235.pages.dev"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Play the original Claude of Duty by @mattshumer_"
+            >
+              Original <span>Claude of Duty ↗</span>
+            </a>
+          </div>
+        </div>
         <div class="boot-rule"></div>
 
         <!-- Single shell: options + progress from first paint (no phase swap). -->
@@ -1148,8 +1297,7 @@
               The scaffold was really impressive. But a lot of it was DOA when I tried to play it.
               <br /><br />
               I was able to refine it with <strong>Grok</strong> and my experience as a game designer.
-              After spending 5 hours making small iterative changes, I feel pretty confident that
-              the Bitter Lesson doesn’t apply to game design. Yet.
+              It took 4 to 5 hours and many small iterations. The Bitter Lesson doesn’t apply to games. Yet.
               <br /><a href="https://x.com/sidriff" target="_blank" rel="noopener noreferrer">— @sidriff</a>
             </p>
 
@@ -1381,19 +1529,34 @@
 
             <div class="boot-actions">
               <div class="boot-cta-row">
-                <label
-                  class="boot-fullscreen"
-                  for="boot-fullscreen"
-                  title="Fullscreen lets the game lock Ctrl+WASD so crouch-walk does not close the tab"
-                >
-                  <input type="checkbox" id="boot-fullscreen" checked />
-                  <span>Fullscreen</span>
-                  <span class="boot-fullscreen-sub">· crouch</span>
-                </label>
+                <div class="boot-cta-opts">
+                  <label
+                    class="boot-fullscreen"
+                    for="boot-fullscreen"
+                    title="Fullscreen lets the game lock Ctrl+WASD so crouch-walk does not close the tab"
+                  >
+                    <input type="checkbox" id="boot-fullscreen" checked />
+                    <span>Fullscreen</span>
+                    <span class="boot-fullscreen-sub">· crouch</span>
+                  </label>
+                  <label
+                    class="boot-fullscreen"
+                    for="boot-record"
+                    title="Record this run to a video file on your machine (nothing is uploaded)"
+                  >
+                    <input type="checkbox" id="boot-record" />
+                    <span>Record run</span>
+                    <span class="boot-fullscreen-sub">· local</span>
+                  </label>
+                </div>
                 <button type="button" id="boot-deploy" class="is-action">
                   <span class="boot-spinner" aria-hidden="true"></span>
                   <span class="boot-deploy-label">Load</span>
                 </button>
+              </div>
+              <div class="boot-last-run" id="boot-last-run" hidden>
+                <a id="boot-last-run-link" href="#">Download last run</a>
+                <span class="boot-last-run-meta" id="boot-last-run-meta"></span>
               </div>
               <button type="button" id="boot-retreat" title="Back to menu">Retreat</button>
               <span class="boot-hint" id="boot-hint">Select a tier, then load</span>

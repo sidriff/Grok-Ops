@@ -97,6 +97,10 @@ function createBoardStore() {
       if (!auth) throw new Error('Auth still loading — try again in a moment');
       return auth.signInWithX();
     },
+    async signInWithHandle(handle) {
+      // Free-for-all claim removed — verified X only.
+      throw new Error('Use Log in with X — handles must be verified.');
+    },
     async signOut() {
       if (!auth) return;
       return auth.signOut();

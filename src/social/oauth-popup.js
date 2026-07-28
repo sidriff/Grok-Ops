@@ -1,15 +1,18 @@
 /**
- * Lightweight OAuth callback handler for popup windows.
+ * OAuth popup helpers.
  *
- * When X redirects back to SITE_URL?code=… inside a popup, this module
- * postMessages the code to the opener and closes — the main game never unloads.
+ * X → Convex → SITE_URL often severs `window.opener` (COOP). We never rely on
+ * it alone: BroadcastChannel + localStorage handoff notify the game tab even
+ * when opener is null. The popup must NOT boot the game.
  */
 
 const MSG_TYPE = 'grok-ops-oauth';
+const CHANNEL_NAME = 'grok-ops-oauth';
+const HANDOFF_KEY = '__grokOpsOAuthHandoff';
 
 /**
- * If this window is an OAuth popup landing with ?code=, hand it to the opener.
- * @returns {boolean} true if this page should stay blank / not boot the game
+ * If this window is an OAuth return (?code= / ?error=), hand off and stay blank.
+ * @returns {boolean} true → do not load the game
  */
 export function handleOAuthPopupCallback() {
   try {
@@ -19,39 +22,82 @@ export function handleOAuthPopupCallback() {
     const errorDesc = params.get('error_description');
 
     if (!code && !error) return false;
-    if (!window.opener || window.opener.closed) return false;
 
-    const origin = location.origin;
-    window.opener.postMessage(
-      {
-        type: MSG_TYPE,
-        code: code || null,
-        error: error || null,
-        errorDescription: errorDesc || null,
-      },
-      origin,
-    );
+    const payload = {
+      type: MSG_TYPE,
+      code: code || null,
+      error: error || null,
+      errorDescription: errorDesc || null,
+      ts: Date.now(),
+    };
 
-    // Clean URL then close — brief "signed in" flash if close is blocked.
-    history.replaceState({}, '', location.pathname);
+    // 1) Same-origin BroadcastChannel — works even when opener is null.
+    try {
+      const bc = new BroadcastChannel(CHANNEL_NAME);
+      bc.postMessage(payload);
+      bc.close();
+    } catch {
+      /* older browsers */
+    }
+
+    // 2) localStorage → storage event on the opener tab (same origin).
+    try {
+      localStorage.setItem(HANDOFF_KEY, JSON.stringify(payload));
+      // Nudge listeners that only fire on *change*: write, clear, rewrite.
+      localStorage.removeItem(HANDOFF_KEY);
+      localStorage.setItem(HANDOFF_KEY, JSON.stringify(payload));
+    } catch {
+      /* private mode */
+    }
+
+    // 3) Classic postMessage if opener still linked.
+    if (window.opener && !window.opener.closed) {
+      try {
+        window.opener.postMessage(payload, location.origin);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // Clean URL + minimal “closing” page (never load game assets).
+    try {
+      history.replaceState({}, '', location.pathname);
+    } catch {
+      /* ignore */
+    }
     document.title = 'Signed in — closing…';
-    document.body.innerHTML =
-      '<p style="font:14px system-ui;color:#ddd;background:#0a0c10;margin:0;padding:2rem;min-height:100vh">Signed in. You can close this window.</p>';
-    setTimeout(() => {
+    document.documentElement.innerHTML = `<head><meta charset="utf-8"><title>Signed in</title></head>
+<body style="margin:0;background:#05070a;color:#e8eef2;font:600 14px/1.4 system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;letter-spacing:.08em;text-transform:uppercase">
+  <p style="opacity:.85">Signed in — you can close this window</p>
+</body>`;
+
+    const tryClose = () => {
       try {
         window.close();
       } catch {
         /* ignore */
       }
-    }, 120);
+    };
+    tryClose();
+    setTimeout(tryClose, 50);
+    setTimeout(tryClose, 250);
+    setTimeout(tryClose, 800);
+
     return true;
   } catch (err) {
     console.warn('[social] oauth popup handoff failed', err);
+    // Still block game boot if we clearly have OAuth params.
+    try {
+      const p = new URLSearchParams(location.search);
+      if (p.get('code') || p.get('error')) return true;
+    } catch {
+      /* ignore */
+    }
     return false;
   }
 }
 
-export { MSG_TYPE as OAUTH_MSG_TYPE };
+export { MSG_TYPE as OAUTH_MSG_TYPE, CHANNEL_NAME as OAUTH_CHANNEL, HANDOFF_KEY as OAUTH_HANDOFF_KEY };
 
 /**
  * Open a centered popup for the OAuth provider URL.

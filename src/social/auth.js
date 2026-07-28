@@ -6,7 +6,12 @@
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
 import { api } from '../../convex/_generated/api.js';
 import { getConvexUrl } from './config.js';
-import { OAUTH_MSG_TYPE, openOAuthPopup } from './oauth-popup.js';
+import {
+  OAUTH_MSG_TYPE,
+  OAUTH_CHANNEL,
+  OAUTH_HANDOFF_KEY,
+  openOAuthPopup,
+} from './oauth-popup.js';
 
 const JWT_KEY = '__convexAuthJWT';
 const REFRESH_KEY = '__convexAuthRefreshToken';
@@ -57,7 +62,9 @@ export class SocialAuth {
     this.error = null;
     this._unsubBoard = null;
     this._unsubMe = null;
-    this._authWired = false;
+    this._oauthBusy = false;
+    this._oauthWaiters = [];
+    this._bc = null;
   }
 
   get ready() {
@@ -131,27 +138,43 @@ export class SocialAuth {
     try {
       localStorage.removeItem(this._sk(key));
     } catch {
-      /* private mode */
+      /* ignore */
     }
   }
 
+  /**
+   * Persist tokens and re-auth the WebSocket (must re-call setAuth — Convex
+   * only picks up a new identity when setConfig runs again).
+   * @param {{ token: string, refreshToken?: string } | null} tokens
+   */
   async _setTokens(tokens) {
     if (!tokens) {
       this._token = null;
       this._remove(JWT_KEY);
       this._remove(REFRESH_KEY);
+      this.http.clearAuth?.();
+      this.me = null;
     } else {
       this._token = tokens.token;
       this._set(JWT_KEY, tokens.token);
       if (tokens.refreshToken) this._set(REFRESH_KEY, tokens.refreshToken);
+      try {
+        this.http.setAuth(tokens.token);
+      } catch {
+        /* ignore */
+      }
     }
     this._wireAuth();
     this._emit();
+    // Pull profile immediately so the UI can show name/avatar without waiting
+    // for the first authenticated WS transition.
+    if (this._token) {
+      await this._refreshMe();
+    }
   }
 
   _wireAuth() {
-    if (this._authWired) return;
-    this._authWired = true;
+    // Always re-register — setAuth/setConfig re-auths the socket with current token.
     this.client.setAuth(async ({ forceRefreshToken }) => {
       if (forceRefreshToken) {
         const refreshToken = this._get(REFRESH_KEY);
@@ -159,20 +182,51 @@ export class SocialAuth {
           try {
             const result = await this.http.action(api.auth.signIn, { refreshToken });
             if (result?.tokens) {
-              await this._setTokens(result.tokens);
-            } else {
-              await this._setTokens(null);
+              this._token = result.tokens.token;
+              this._set(JWT_KEY, result.tokens.token);
+              if (result.tokens.refreshToken) {
+                this._set(REFRESH_KEY, result.tokens.refreshToken);
+              }
+              try {
+                this.http.setAuth(result.tokens.token);
+              } catch {
+                /* ignore */
+              }
+              return result.tokens.token;
             }
+            await this._setTokens(null);
+            return null;
           } catch (err) {
             console.warn('[social] token refresh failed', err);
             await this._setTokens(null);
+            return null;
           }
-        } else {
-          return null;
         }
+        return null;
       }
       return this._token;
     });
+  }
+
+  async _refreshMe() {
+    if (!this._token) {
+      this.me = null;
+      this._ready = true;
+      this._emit();
+      return;
+    }
+    try {
+      this.http.setAuth(this._token);
+      const me = await this.http.query(api.users.me, {});
+      this.me = me ?? null;
+      this._ready = true;
+      this.error = null;
+      this._emit();
+    } catch (err) {
+      console.warn('[social] me fetch failed', err);
+      this._ready = true;
+      this._emit();
+    }
   }
 
   _applyBoard(board) {
@@ -183,8 +237,7 @@ export class SocialAuth {
   }
 
   /**
-   * Boot session: HTTP fetch board first (reliable), then live WS subscription.
-   * Consume OAuth `?code=` if present, else restore JWT from storage.
+   * Boot session: HTTP fetch board first, then live WS + OAuth listeners.
    */
   async init() {
     this._wireAuth();
@@ -212,10 +265,10 @@ export class SocialAuth {
       },
     );
 
-    // Full-page OAuth return (fallback if popup blocked).
+    // Full-page OAuth return (fallback if popup blocked / handoff failed).
     const params = new URLSearchParams(location.search);
     const code = params.get('code');
-    if (code && !window.opener) {
+    if (code) {
       const url = new URL(location.href);
       url.searchParams.delete('code');
       history.replaceState({}, '', url.pathname + url.search + url.hash);
@@ -223,23 +276,87 @@ export class SocialAuth {
         await this._exchangeCode(code);
       } catch (err) {
         console.error('[social] OAuth code exchange failed', err);
+        this.error = String(err?.message ?? err);
+        this._emit();
       }
     } else {
       const token = this._get(JWT_KEY);
       if (token) {
         this._token = token;
+        try {
+          this.http.setAuth(token);
+        } catch {
+          /* ignore */
+        }
         this._wireAuth();
+        await this._refreshMe();
       }
     }
 
-    // Popup OAuth completes via postMessage from the callback window.
+    // Popup OAuth: postMessage + BroadcastChannel + localStorage handoff.
     this._onOAuthMessage = (ev) => {
-      if (ev.origin !== location.origin) return;
+      if (ev.origin && ev.origin !== location.origin) return;
       const data = ev.data;
       if (!data || data.type !== OAUTH_MSG_TYPE) return;
       void this._onPopupOAuthMessage(data);
     };
     window.addEventListener('message', this._onOAuthMessage);
+
+    try {
+      this._bc = new BroadcastChannel(OAUTH_CHANNEL);
+      this._bc.onmessage = (ev) => {
+        const data = ev.data;
+        if (!data || data.type !== OAUTH_MSG_TYPE) return;
+        void this._onPopupOAuthMessage(data);
+      };
+    } catch {
+      this._bc = null;
+    }
+
+    this._onStorage = (ev) => {
+      if (ev.key === OAUTH_HANDOFF_KEY && ev.newValue) {
+        try {
+          const data = JSON.parse(ev.newValue);
+          if (data?.type === OAUTH_MSG_TYPE) {
+            void this._onPopupOAuthMessage(data);
+          }
+        } catch {
+          /* ignore */
+        }
+        try {
+          localStorage.removeItem(OAUTH_HANDOFF_KEY);
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      // Sibling window wrote JWT (e.g. exchange ran in popup).
+      if (ev.key === this._sk(JWT_KEY) && ev.newValue && ev.newValue !== this._token) {
+        this._token = ev.newValue;
+        try {
+          this.http.setAuth(ev.newValue);
+        } catch {
+          /* ignore */
+        }
+        this._wireAuth();
+        void this._refreshMe();
+      }
+    };
+    window.addEventListener('storage', this._onStorage);
+
+    // Drain a handoff left if we missed the storage event (race).
+    try {
+      const raw = localStorage.getItem(OAUTH_HANDOFF_KEY);
+      if (raw) {
+        const data = JSON.parse(raw);
+        localStorage.removeItem(OAUTH_HANDOFF_KEY);
+        if (data?.type === OAUTH_MSG_TYPE) {
+          void this._onPopupOAuthMessage(data);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
 
     this._unsubMe = this.client.onUpdate(
       api.users.me,
@@ -278,6 +395,11 @@ export class SocialAuth {
 
   async _onPopupOAuthMessage(data) {
     if (this._oauthBusy) return;
+    const dedupeKey =
+      data.tokens?.token || data.ticket || data.code || data.error || data.ts;
+    if (dedupeKey && dedupeKey === this._lastOAuthKey) return;
+    if (dedupeKey) this._lastOAuthKey = dedupeKey;
+
     this._oauthBusy = true;
     try {
       if (data.error) {
@@ -287,75 +409,108 @@ export class SocialAuth {
         this._emit();
         return;
       }
-      if (!data.code) return;
-      await this._exchangeCode(data.code);
-      console.info('[social] signed in via popup');
+      if (data.tokens?.token) {
+        await this._setTokens(data.tokens);
+        console.info('[social] signed in via popup tokens');
+        return;
+      }
+      // OAuth 1.0a one-time ticket (preferred free path).
+      if (data.ticket) {
+        await this.signInWithTicket(data.ticket);
+        return;
+      }
+      if (data.code) {
+        await this._exchangeCode(data.code);
+        console.info('[social] signed in via popup code');
+        return;
+      }
+      const token = this._get(JWT_KEY);
+      if (token && token !== this._token) {
+        this._token = token;
+        try {
+          this.http.setAuth(token);
+        } catch {
+          /* ignore */
+        }
+        this._wireAuth();
+        await this._refreshMe();
+      }
     } catch (err) {
-      console.error('[social] popup code exchange failed', err);
+      console.error('[social] popup OAuth complete failed', err);
       this.error = String(err?.message ?? err);
       this._emit();
     } finally {
       this._oauthBusy = false;
-      if (this._oauthWaiters) {
-        for (const w of this._oauthWaiters) w();
-        this._oauthWaiters = [];
+      for (const w of this._oauthWaiters.splice(0)) {
+        try {
+          w();
+        } catch {
+          /* ignore */
+        }
       }
     }
   }
 
   /**
-   * Start X OAuth in a popup so the game stays open.
-   * Falls back to full-page redirect if popups are blocked.
+   * Finish OAuth 1.0a after popup returns with x_ticket (or handoff).
+   * @param {string} ticket
+   */
+  async signInWithTicket(ticket) {
+    if (!ticket) throw new Error('Missing login ticket');
+    const result = await this.http.action(api.auth.signIn, {
+      provider: 'x-oauth1',
+      params: { ticket },
+    });
+    if (result?.tokens) {
+      await this._setTokens(result.tokens);
+      console.info('[social] signed in via X OAuth 1.0a');
+      return;
+    }
+    throw new Error('Sign-in did not return a session');
+  }
+
+  /**
+   * Real X login (OAuth 1.0a popup) — free tier, verified @handle.
+   * Uses Consumer API Key/Secret, not OAuth 2 Client ID.
    */
   async signInWithX() {
     try {
-      const result = await this.client.action(api.auth.signIn, {
-        provider: 'twitter',
-        params: {},
-      });
-      if (result?.redirect) {
-        if (result.verifier) this._set(VERIFIER_KEY, result.verifier);
-        const redirectUrl =
-          typeof result.redirect === 'string'
-            ? result.redirect
-            : result.redirect.toString();
-
-        const popup = openOAuthPopup(redirectUrl);
-        if (!popup) {
-          // Popup blocked — last resort full navigation.
-          console.warn('[social] popup blocked; full-page redirect');
-          location.href = redirectUrl;
-          return;
-        }
-
-        // Resolve when popup closes or auth completes (best-effort).
-        await new Promise((resolve) => {
-          this._oauthWaiters = this._oauthWaiters || [];
-          this._oauthWaiters.push(resolve);
-          const poll = setInterval(() => {
-            if (popup.closed) {
-              clearInterval(poll);
-              resolve();
-            }
-          }, 400);
-          // Safety timeout 3 minutes
-          setTimeout(() => {
-            clearInterval(poll);
-            resolve();
-          }, 180000);
-        });
+      const { url } = await this.client.action(api.twitterOAuth1.start, {});
+      const popup = openOAuthPopup(url);
+      if (!popup) {
+        console.warn('[social] popup blocked; full-page redirect');
+        location.href = url;
         return;
       }
-      if (result?.tokens) {
-        await this._setTokens(result.tokens);
+
+      await new Promise((resolve) => {
+        this._oauthWaiters.push(resolve);
+        const poll = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(poll);
+            resolve();
+          }
+        }, 400);
+        setTimeout(() => {
+          clearInterval(poll);
+          resolve();
+        }, 180000);
+      });
+
+      if (!this._token) {
+        const token = this._get(JWT_KEY);
+        if (token) {
+          this._token = token;
+          this._wireAuth();
+          await this._refreshMe();
+        }
       }
     } catch (err) {
-      console.error('[social] signIn failed', err);
+      console.error('[social] X OAuth 1.0a failed', err);
       const msg = String(err?.message ?? err);
-      // Common: missing AUTH_TWITTER_ID / AUTH_TWITTER_SECRET on Convex.
-      if (/twitter|AUTH_|provider|configured|env/i.test(msg)) {
+      if (/CONSUMER|Missing AUTH_TWITTER/i.test(msg)) {
         throw new Error(
-          'X login not configured — set AUTH_TWITTER_ID and AUTH_TWITTER_SECRET on the Convex deployment.',
+          'Set AUTH_TWITTER_CONSUMER_KEY + AUTH_TWITTER_CONSUMER_SECRET on Convex (API Key + Secret from X Keys page).',
         );
       }
       throw err;
@@ -400,6 +555,16 @@ export class SocialAuth {
       window.removeEventListener('message', this._onOAuthMessage);
       this._onOAuthMessage = null;
     }
+    if (this._onStorage) {
+      window.removeEventListener('storage', this._onStorage);
+      this._onStorage = null;
+    }
+    try {
+      this._bc?.close?.();
+    } catch {
+      /* ignore */
+    }
+    this._bc = null;
     this._unsubBoard?.();
     this._unsubMe?.();
     this._unsubBoard = null;

@@ -47,4 +47,26 @@ export default defineSchema({
   })
     .index("by_score", ["score"])
     .index("by_user", ["userId"]),
+
+  /**
+   * Short-lived OAuth 1.0a request tokens + one-time login tickets.
+   * oauthToken doubles as ticket id for kind "ticket".
+   */
+  twitterOAuth1: defineTable({
+    kind: v.union(v.literal("request"), v.literal("ticket")),
+    oauthToken: v.string(),
+    oauthTokenSecret: v.string(),
+    twitterUserId: v.optional(v.string()),
+    handle: v.optional(v.string()),
+    name: v.optional(v.string()),
+    image: v.optional(v.string()),
+    expiresAt: v.number(),
+  }).index("by_token", ["oauthToken"]),
+
+  /** Fixed-window counters for public/auth spam protection. */
+  rateLimits: defineTable({
+    key: v.string(),
+    windowStart: v.number(),
+    count: v.number(),
+  }).index("by_key", ["key"]),
 });

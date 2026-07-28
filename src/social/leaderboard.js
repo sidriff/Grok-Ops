@@ -1,8 +1,5 @@
 /**
- * Boot-shell leaderboard column — always visible, login CTA when signed out.
- *
- * Columns: # · Operator · Time · Allies (icons) · Score
- * score = (time + combatPoints) × max(1, alliesAlive)
+ * Boot-shell leaderboard — verified X login (OAuth 1.0a) to post.
  */
 
 function mmss(sec) {
@@ -17,7 +14,6 @@ function fmtScore(n) {
   return v.toLocaleString('en-US');
 }
 
-/** Prefer display name; always keep a readable label. */
 function labelFor(row) {
   const handle = (row?.handle || '').replace(/^@/, '').trim();
   const name = (row?.name || '').trim();
@@ -29,7 +25,16 @@ function labelFor(row) {
   return { primary: 'unknown', secondary: '' };
 }
 
-/** Tiny SVG person silhouette (blue ally). */
+/** Avatar URL for a board row — prefer stored image, else free handle-based art. */
+function avatarUrlFor(row) {
+  const stored = (row?.image || '').trim();
+  if (stored) return stored;
+  const handle = (row?.handle || '').replace(/^@/, '').trim();
+  if (!handle) return '';
+  // ui-avatars always works; unavatar is flaky for X now.
+  return `https://ui-avatars.com/api/?name=${encodeURIComponent(handle)}&background=1d9bf0&color=fff&size=64&bold=true`;
+}
+
 function personSvg() {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
@@ -49,7 +54,6 @@ function personSvg() {
   return svg;
 }
 
-/** Tiny SVG tombstone (fallen ally). */
 function tombSvg() {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
@@ -80,10 +84,6 @@ function tombSvg() {
   return svg;
 }
 
-/**
- * Three slots: blue person if that ally is up, tombstone if down.
- * @param {number} alive  0–3
- */
 function alliesIcons(alive) {
   const wrap = document.createElement('span');
   wrap.className = 'boot-lb-allies';
@@ -99,7 +99,6 @@ function alliesIcons(alive) {
 }
 
 /**
- * Wire a leaderboard column already present in index.html.
  * @param {import('./auth.js').SocialAuth | null} social
  * @param {ParentNode} [root=document]
  */
@@ -113,23 +112,31 @@ export function bindLeaderboard(social, root = document) {
   const loginBtn = col.querySelector('#boot-lb-login');
   const logoutBtn = col.querySelector('#boot-lb-logout');
   const whoEl = col.querySelector('#boot-lb-who');
+  const ctaEl = authEl?.querySelector('.boot-lb-cta') ?? null;
+
+  let profileEl = authEl?.querySelector('.boot-lb-profile') ?? null;
+  if (authEl && !profileEl) {
+    profileEl = document.createElement('div');
+    profileEl.className = 'boot-lb-profile';
+    profileEl.hidden = true;
+    profileEl.innerHTML = `
+      <img class="boot-lb-avatar" alt="" width="36" height="36" decoding="async" />
+      <div class="boot-lb-profile-text">
+        <span class="boot-lb-profile-name"></span>
+        <span class="boot-lb-profile-handle"></span>
+      </div>
+    `;
+    if (ctaEl) authEl.insertBefore(profileEl, ctaEl);
+    else authEl.prepend(profileEl);
+  }
+  const avatarEl = profileEl?.querySelector('.boot-lb-avatar') ?? null;
+  const nameEl = profileEl?.querySelector('.boot-lb-profile-name') ?? null;
+  const handleEl = profileEl?.querySelector('.boot-lb-profile-handle') ?? null;
 
   let unsub = null;
 
-  const setOffline = (msg) => {
-    if (statusEl) statusEl.textContent = msg;
-    if (listEl) listEl.innerHTML = '';
-    if (authEl) {
-      authEl.innerHTML = '';
-      const p = document.createElement('p');
-      p.className = 'boot-lb-cta';
-      p.textContent = msg;
-      authEl.appendChild(p);
-    }
-  };
-
   if (!social) {
-    setOffline('Leaderboard offline');
+    if (statusEl) statusEl.textContent = 'Leaderboard offline';
     return { dispose() {} };
   }
 
@@ -163,17 +170,39 @@ export function bindLeaderboard(social, root = document) {
       const nameWrap = document.createElement('span');
       nameWrap.className = 'boot-lb-name';
       const { primary, secondary } = labelFor(row);
+
+      const avSrc = avatarUrlFor(row);
+      if (avSrc) {
+        const av = document.createElement('img');
+        av.className =
+          'boot-lb-row-avatar' + (row?.image ? '' : ' is-fallback');
+        av.src = avSrc;
+        av.alt = '';
+        av.width = 22;
+        av.height = 22;
+        av.decoding = 'async';
+        av.referrerPolicy = 'no-referrer';
+        av.onerror = () => {
+          const h = (row?.handle || primary || '?').replace(/^@/, '');
+          av.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(h.slice(0, 2))}&background=1d9bf0&color=fff&size=64&bold=true`;
+          av.onerror = null;
+        };
+        nameWrap.appendChild(av);
+      }
+
+      const textCol = document.createElement('span');
+      textCol.className = 'boot-lb-name-text';
       const primaryEl = document.createElement('span');
       primaryEl.className = 'boot-lb-primary';
       primaryEl.textContent = primary;
-      nameWrap.appendChild(primaryEl);
+      textCol.appendChild(primaryEl);
       if (secondary) {
         const sec = document.createElement('span');
         sec.className = 'boot-lb-secondary';
         sec.textContent = secondary;
-        nameWrap.appendChild(sec);
+        textCol.appendChild(sec);
       }
-      if (row.won) nameWrap.title = 'Survived the full five minutes';
+      nameWrap.appendChild(textCol);
 
       const time = document.createElement('span');
       time.className = 'boot-lb-time';
@@ -196,29 +225,83 @@ export function bindLeaderboard(social, root = document) {
   const renderAuth = (state) => {
     if (!authEl) return;
     const { me, isAuthenticated } = state;
-    if (isAuthenticated && me) {
-      if (whoEl) {
-        whoEl.hidden = false;
-        whoEl.textContent = `@${me.handle}`;
-      }
+
+    if (isAuthenticated) {
       if (loginBtn) loginBtn.hidden = true;
       if (logoutBtn) logoutBtn.hidden = false;
-      const cta = authEl.querySelector('.boot-lb-cta');
-      if (cta) {
-        cta.textContent =
-          me.bestTimeSurvived != null
+      if (whoEl) whoEl.hidden = true;
+
+      if (profileEl) {
+        profileEl.hidden = false;
+        const handle = (me?.handle || '').replace(/^@/, '');
+        const display = (me?.name || '').trim();
+        // Prefer X display name (e.g. "Sid Riff"), @handle underneath.
+        if (nameEl) {
+          nameEl.textContent =
+            display && display.toLowerCase() !== handle.toLowerCase()
+              ? display
+              : handle
+                ? `@${handle}`
+                : 'Operator';
+        }
+        if (handleEl) {
+          if (
+            display &&
+            handle &&
+            display.toLowerCase() !== handle.toLowerCase()
+          ) {
+            handleEl.textContent = `@${handle}`;
+            handleEl.hidden = false;
+          } else {
+            handleEl.textContent = '';
+            handleEl.hidden = true;
+          }
+        }
+        if (avatarEl) {
+          const label =
+            display && display.toLowerCase() !== handle.toLowerCase()
+              ? display
+              : handle
+                ? `@${handle}`
+                : 'Operator';
+          const src =
+            me?.image ||
+            (handle
+              ? `https://ui-avatars.com/api/?name=${encodeURIComponent(handle)}&background=1d9bf0&color=fff&size=128&bold=true`
+              : '');
+          if (src) {
+            avatarEl.src = src;
+            avatarEl.hidden = false;
+            avatarEl.alt = label;
+            avatarEl.referrerPolicy = 'no-referrer';
+            avatarEl.onerror = () => {
+              if (handle) {
+                avatarEl.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(handle.slice(0, 2))}&background=1d9bf0&color=fff&size=128&bold=true`;
+                avatarEl.onerror = null;
+              } else {
+                avatarEl.hidden = true;
+              }
+            };
+          } else {
+            avatarEl.removeAttribute('src');
+            avatarEl.hidden = true;
+          }
+        }
+      }
+
+      if (ctaEl) {
+        ctaEl.textContent =
+          me?.bestTimeSurvived != null
             ? `Best ${mmss(me.bestTimeSurvived)} · scores auto-post`
             : 'Play a match — your score posts on the board';
       }
     } else {
-      if (whoEl) {
-        whoEl.hidden = true;
-        whoEl.textContent = '';
-      }
       if (loginBtn) loginBtn.hidden = false;
       if (logoutBtn) logoutBtn.hidden = true;
-      const cta = authEl.querySelector('.boot-lb-cta');
-      if (cta) cta.textContent = 'Log in with X to post your score';
+      if (profileEl) profileEl.hidden = true;
+      if (ctaEl) {
+        ctaEl.textContent = 'Log in with X to post scores (verified @handle)';
+      }
     }
   };
 
@@ -229,18 +312,11 @@ export function bindLeaderboard(social, root = document) {
     void social
       .signInWithX()
       .then(() => {
-        if (statusEl && !social.isAuthenticated) {
-          // Popup closed without completing — clear busy text.
-          statusEl.textContent = '';
-        }
+        if (statusEl && !social.isAuthenticated) statusEl.textContent = '';
       })
       .catch((err) => {
         const msg = String(err?.message ?? err);
-        if (statusEl) {
-          statusEl.textContent = /AUTH_TWITTER|not configured/i.test(msg)
-            ? 'X login not set up — need AUTH_TWITTER_ID + SECRET on Convex.'
-            : msg.slice(0, 120);
-        }
+        if (statusEl) statusEl.textContent = msg.slice(0, 140);
         console.error(err);
       });
   });
@@ -254,11 +330,8 @@ export function bindLeaderboard(social, root = document) {
   unsub = social.subscribe((state) => {
     renderBoard(state);
     renderAuth(state);
-    if (state.error && statusEl && state.isAuthenticated === false) {
-      // Don't clobber board load errors that already rendered.
-      if (!state.board?.length || /oauth|sign|twitter|X login|AUTH_/i.test(state.error)) {
-        statusEl.textContent = state.error.slice(0, 140);
-      }
+    if (state.error && statusEl && !state.isAuthenticated) {
+      statusEl.textContent = state.error.slice(0, 140);
     }
   });
 

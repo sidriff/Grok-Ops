@@ -6,6 +6,7 @@
  */
 
 import { el, setText, setStyle, setClass, ease, clamp01, damp } from './util.js';
+import { formatBytes, formatDuration } from '../core/recorder.js';
 
 function mmss(sec) {
   const s = Math.max(0, Math.floor(sec));
@@ -30,6 +31,12 @@ export class DeathOverlay {
     this.statTime = el('div', 'ow-death-stat', this.stats);
     this.statKills = el('div', 'ow-death-stat', this.stats);
     this.statAllies = el('div', 'ow-death-stat', this.stats);
+
+    // Local run capture — only shown when Record run was on for this match.
+    this.rec = el('div', 'ow-death-rec', this.panel);
+    this.recLink = el('a', 'ow-death-rec-link', this.rec, 'Download run');
+    this.recMeta = el('span', 'ow-death-rec-meta', this.rec);
+    this.recLink.addEventListener('click', (ev) => ev.stopPropagation());
 
     this.actions = el('div', 'ow-death-actions', this.panel);
     this.retry = el('button', 'ow-death-retry', this.actions, 'RETRY');
@@ -57,7 +64,32 @@ export class DeathOverlay {
     this.onRetreat = null;
     setStyle(this.root, 'display', 'none');
     setStyle(this.stats, 'display', 'none');
+    setStyle(this.rec, 'display', 'none');
     setStyle(this.actions, 'display', 'none');
+  }
+
+  /**
+   * Wire a local MediaRecorder blob from the title shell recorder.
+   * @param {{ url: string, name: string, bytes?: number, duration?: number } | null} last
+   */
+  setLastRun(last) {
+    if (!last?.url) {
+      setStyle(this.rec, 'display', 'none');
+      this.recLink.removeAttribute('href');
+      this.recLink.removeAttribute('download');
+      setText(this.recMeta, '');
+      return;
+    }
+    // Only visible while the endgame panel is up.
+    setStyle(this.rec, 'display', this._endgame ? 'flex' : 'none');
+    this.recLink.href = last.url;
+    this.recLink.download = last.name || 'grok-ops-run.webm';
+    setText(this.recLink, 'Download run');
+    const bits = [];
+    if (last.duration != null) bits.push(formatDuration(last.duration));
+    if (last.bytes != null) bits.push(formatBytes(last.bytes));
+    bits.push('local');
+    setText(this.recMeta, bits.join(' · '));
   }
 
   /**
@@ -87,6 +119,9 @@ export class DeathOverlay {
       setStyle(this.stats, 'display', endgame ? '' : 'none');
       setStyle(this.actions, 'display', endgame ? '' : 'none');
       setStyle(this.timer, 'display', endgame ? 'none' : '');
+      // Keep a wired download visible on the score card; hide mid-death-cam.
+      if (!endgame) setStyle(this.rec, 'display', 'none');
+      else if (this.recLink.getAttribute('href')) setStyle(this.rec, 'display', 'flex');
     }
 
     if (endgame) {

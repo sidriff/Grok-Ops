@@ -136,6 +136,8 @@ const engine = new Engine({ canvas, config });
 // Always wire look prefs — shell is also the pause menu (incl. skipMenu path).
 load.bindConfig(config, engine.camera);
 load.bindInput(engine.input);
+// Local run capture (opt-in Record run checkbox on the title shell).
+load.bindCanvas(canvas);
 
 // Registration order is irrelevant — Registry topo-sorts on static deps.
 engine
@@ -327,6 +329,19 @@ if (!skipMenu) {
   await load.enterPlaying({ immediate: false });
   engine.input.capturePointerForGame({ lock: true });
 }
+
+// Seal local canvas capture when the match ends, then surface download on the
+// death / score card (and the title shell when they retreat).
+engine.ctx.events.on('game:end', () => {
+  void load.finalizeRecording().then((last) => {
+    engine.ctx.peek('ui')?.setLastRun?.(last);
+  });
+});
+// Retry mid-session (no title shell) — start a fresh capture if Record is on.
+// No-op if Deploy already started one for this run.
+engine.ctx.events.on('game:begin', () => {
+  load.startRecordingIfEnabled();
+});
 
 // Auto-post personal best when a survival match ends (logged-in only).
 engine.ctx.events.on('game:end', (payload) => {

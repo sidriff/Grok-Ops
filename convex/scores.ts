@@ -5,11 +5,17 @@ import {
   combatPointsFromKills,
   computeScore,
 } from "./lib/score";
+import { takeToken } from "./lib/rateLimit";
 
 /** Rows shown in the menu column. */
 const BOARD_DISPLAY = 25;
 /** Hard cap — prune anything below the 100th score. */
 const BOARD_KEEP = 100;
+/** ~5 min match, absurd headshot farm — still client-trusted, just not infinite. */
+const MAX_COMBAT_POINTS = 50_000;
+/** Submit spam per signed-in user (mutations still cost free-plan calls). */
+const SUBMIT_LIMIT = 20;
+const SUBMIT_WINDOW_MS = 60_000;
 
 export { computeScore, combatPointsFromKills };
 
@@ -113,13 +119,26 @@ export const submit = mutation({
       return { ok: false, improved: false, score: 0, reason: "not_authenticated" };
     }
 
+    const allowed = await takeToken(
+      ctx,
+      `submit:${userId}`,
+      SUBMIT_LIMIT,
+      SUBMIT_WINDOW_MS,
+    );
+    if (!allowed) {
+      return { ok: false, improved: false, score: 0, reason: "rate_limited" };
+    }
+
     const user = await ctx.db.get(userId);
     if (user === null) {
       return { ok: false, improved: false, score: 0, reason: "no_user" };
     }
 
-    const kills = Math.max(0, Math.floor(args.kills));
-    const combatPoints = Math.max(0, Math.floor(args.combatPoints));
+    const kills = Math.max(0, Math.min(500, Math.floor(args.kills)));
+    const combatPoints = Math.max(
+      0,
+      Math.min(MAX_COMBAT_POINTS, Math.floor(args.combatPoints)),
+    );
     const timeSurvived = Math.max(0, Math.min(600, args.timeSurvived));
     const alliesAlive = Math.max(0, Math.min(3, Math.floor(args.alliesAlive)));
     const won = !!args.won;
@@ -178,7 +197,8 @@ export const submit = mutation({
 
 // Seeds die early — none past 2:00 so real players can own the board.
 const FAKE_OPS = [
-  { handle: "sidriff", name: "Si", kills: 14, headshots: 6, time: 118, allies: 2, won: false },
+  // Don't use real handles (e.g. sidriff) — collisions with live OAuth users.
+  { handle: "si_seed", name: "Si", kills: 14, headshots: 6, time: 118, allies: 2, won: false },
   { handle: "ghostwire", name: "Ghost", kills: 11, headshots: 3, time: 97, allies: 1, won: false },
   { handle: "rattlecan", name: "Rattle", kills: 9, headshots: 2, time: 84, allies: 1, won: false },
   { handle: "lowpoly_dave", name: "Dave", kills: 16, headshots: 7, time: 112, allies: 2, won: false },
@@ -192,9 +212,10 @@ const FAKE_OPS = [
 
 /**
  * Idempotent seed — inserts 10 demo operators if the board is empty.
- * Run: `npx convex run scores:seedDemo '{"force":true}'` to refresh.
+ * INTERNAL ONLY (not callable from the browser). Run from CLI:
+ *   npx convex run scores:seedDemo '{"force":true}'
  */
-export const seedDemo = mutation({
+export const seedDemo = internalMutation({
   args: { force: v.optional(v.boolean()) },
   returns: v.object({
     inserted: v.number(),

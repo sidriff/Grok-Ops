@@ -124,6 +124,8 @@ export class GameSystem {
     this._spawnDebt = START_ENEMIES;
     this._wave = 0;
     this.phase = 'playing';
+    // Retry / Deploy-after-retreat: let the load shell start a fresh capture.
+    this.ctx.events.emit('game:begin', { restart: true });
 
     const ai = this.ctx.peek('ai');
     if (ai) ai.frozen = false;

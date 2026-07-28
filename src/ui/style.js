@@ -693,6 +693,26 @@ const CSS = `
   display:flex; flex-direction:column; gap: calc(var(--u) * 1.2);
   align-items:center;
 }
+.ow-death-rec {
+  display:flex; flex-direction:column; align-items:center; gap: calc(var(--u) * 0.6);
+  margin: calc(var(--u) * 1.6) 0 calc(var(--u) * 0.4);
+}
+.ow-death-rec-link {
+  font-family: var(--fd); font-size: calc(11px * var(--k)); font-weight:700;
+  letter-spacing:.18em; text-transform:uppercase; color: var(--amber);
+  text-decoration:none;
+  border-bottom:1px solid rgba(255, 176, 42, 0.4);
+  text-shadow: var(--sh-o1);
+  cursor:pointer;
+}
+.ow-death-rec-link:hover {
+  color: #ffe0a0;
+  border-bottom-color: rgba(255, 224, 160, 0.6);
+}
+.ow-death-rec-meta {
+  font-size: calc(9px * var(--k)); letter-spacing:.12em;
+  color: var(--ink-3);
+}
 .ow-death-stat {
   font-size: calc(12px * var(--k)); letter-spacing:.28em; color: var(--ink-2);
   text-shadow: var(--sh-o1);

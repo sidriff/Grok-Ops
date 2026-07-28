@@ -1,30 +1,55 @@
-import Twitter from "@auth/core/providers/twitter";
-import { convexAuth } from "@convex-dev/auth/server";
+import { ConvexCredentials } from "@convex-dev/auth/providers/ConvexCredentials";
+import { convexAuth, createAccount } from "@convex-dev/auth/server";
+import { internal } from "./_generated/api";
 
 /**
- * X (Twitter) OAuth 2.0 via Auth.js provider.
+ * Verified X login via OAuth 1.0a ticket (see twitterOAuth1.ts).
  *
- * Env on the Convex deployment:
- *   AUTH_TWITTER_ID, AUTH_TWITTER_SECRET  — X Developer Portal app
- *   SITE_URL                             — game origin (e.g. http://127.0.0.1:5173)
- *   JWT_PRIVATE_KEY, JWKS                — generated for Convex Auth
- *
- * Callback URL to register in the X app:
- *   https://<deployment>.convex.site/api/auth/callback/twitter
+ * Free tier: access_token + v1.1 verify_credentials → real @handle + display name.
  */
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
-    Twitter({
-      // Ensure we get the @handle for the board.
-      userinfo: "https://api.x.com/2/users/me?user.fields=profile_image_url,username",
-      profile({ data }) {
-        return {
-          id: data.id,
-          name: data.name,
-          email: data.email ?? null,
-          image: data.profile_image_url,
-          handle: data.username,
-        };
+    ConvexCredentials({
+      id: "x-oauth1",
+      authorize: async (credentials, ctx) => {
+        const ticket = credentials.ticket;
+        if (typeof ticket !== "string" || !ticket) {
+          throw new Error("Missing login ticket");
+        }
+
+        const claimed = await ctx.runMutation(
+          internal.twitterOAuth1.consumeLoginTicket,
+          { ticket },
+        );
+        if (!claimed) {
+          throw new Error("Login ticket expired — try Log in with X again");
+        }
+
+        const handle = claimed.handle.replace(/^@/, "");
+        const name = (claimed.name || handle).trim() || handle;
+        const image =
+          claimed.image ||
+          `https://unavatar.io/twitter/${handle.toLowerCase()}`;
+
+        const { user } = await createAccount(ctx, {
+          provider: "x-oauth1",
+          account: { id: claimed.twitterUserId },
+          profile: {
+            name,
+            handle,
+            image,
+          },
+        });
+
+        // createAccount won't refresh profile on re-login — always sync.
+        await ctx.runMutation(internal.twitterOAuth1.syncUserProfile, {
+          userId: user._id,
+          handle,
+          name,
+          image,
+        });
+
+        return { userId: user._id };
       },
     }),
   ],

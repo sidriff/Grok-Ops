@@ -16,6 +16,7 @@
  */
 
 import { MenuAudio } from '../audio/menu.js';
+import { RunRecorder, formatBytes, formatDuration } from './recorder.js';
 
 const STAGE_LABELS = {
   boot: 'Booting…',
@@ -134,6 +135,10 @@ export class LoadScreen {
     this.deployBtn = root?.querySelector('#boot-deploy') ?? null;
     this.deployLabel = root?.querySelector('.boot-deploy-label') ?? null;
     this.fullscreenInput = root?.querySelector('#boot-fullscreen') ?? null;
+    this.recordInput = root?.querySelector('#boot-record') ?? null;
+    this.lastRunEl = root?.querySelector('#boot-last-run') ?? null;
+    this.lastRunLink = root?.querySelector('#boot-last-run-link') ?? null;
+    this.lastRunMeta = root?.querySelector('#boot-last-run-meta') ?? null;
     this.retreatBtn = root?.querySelector('#boot-retreat') ?? null;
     this.sensInput = root?.querySelector('#boot-sens') ?? null;
     this.sensVal = root?.querySelector('#boot-sens-val') ?? null;
@@ -163,6 +168,7 @@ export class LoadScreen {
     this._qCards = [];
     this._hideTimer = 0;
     this._menuAudio = new MenuAudio();
+    this._recorder = new RunRecorder();
     this._lastTickAt = 0;
     this._musicArmed = false;
 
@@ -174,6 +180,8 @@ export class LoadScreen {
       masterVol: clampNum(saved.masterVol, 0, 1, 0.95),
       // Default on: fullscreen is what lets Ctrl-crouch survive Ctrl+W in Chrome.
       fullscreen: saved.fullscreen !== false,
+      /** Opt-in local canvas capture for the next Deploy. */
+      recordRun: !!saved.recordRun,
       quality: PRESETS.includes(saved.quality) ? saved.quality : null,
     };
     this._menuAudio.setVolume(this.prefs.masterVol);
@@ -195,6 +203,8 @@ export class LoadScreen {
 
     this._bindLookControls();
     this._bindFullscreenToggle();
+    this._bindRecordToggle();
+    this._syncLastRunUi();
     this._setActionButton('load');
 
     // Quality cards live in index.html for first paint; hydrate + select now so
@@ -373,6 +383,24 @@ export class LoadScreen {
   }
 
   /**
+   * Canvas used for local run recording (MediaRecorder + captureStream).
+   * @param {HTMLCanvasElement | null} canvas
+   */
+  bindCanvas(canvas) {
+    this._recorder.setCanvas(canvas);
+    if (this.recordInput && !this._recorder.supported) {
+      this.recordInput.disabled = true;
+      this.recordInput.checked = false;
+      this.prefs.recordRun = false;
+      const lab = this.recordInput.closest('label');
+      if (lab) {
+        lab.title = 'Recording is not supported in this browser';
+        lab.classList.add('is-disabled');
+      }
+    }
+  }
+
+  /**
    * Link the game AudioSystem so master volume hits both graphs.
    * @param {import('../audio/index.js').AudioSystem | null} audio
    */
@@ -426,6 +454,8 @@ export class LoadScreen {
    */
   returnToTitle({ meta } = {}) {
     if (this._dismissed || !this.root) return;
+    // Seal any in-flight capture so the download link is ready on the shell.
+    void this.finalizeRecording();
     // Drop any stale Deploy waiters from a previous retreat.
     this._deployResolvers.length = 0;
     this._inGame = false;
@@ -479,7 +509,63 @@ export class LoadScreen {
     this._phase = 'playing';
     this.root?.classList.remove('boot-paused');
     this._menuAudio.stopMusic();
+    this.startRecordingIfEnabled();
     return this._hideShell({ immediate });
+  }
+
+  /**
+   * Start canvas capture when the Record run checkbox is on.
+   * Idempotent while already capturing (Deploy + first restart both call this).
+   * @returns {boolean}
+   */
+  startRecordingIfEnabled() {
+    if (this.recordInput) this.prefs.recordRun = !!this.recordInput.checked;
+    if (!this.prefs.recordRun) return false;
+    if (this._recorder.recording) return true;
+    return this._recorder.start({ fps: 30 });
+  }
+
+  /**
+   * Stop capture (if any) and refresh the download link for the last run.
+   * @returns {Promise<object|null>}
+   */
+  async finalizeRecording() {
+    if (!this._recorder.recording) {
+      this._syncLastRunUi();
+      return this._recorder.last;
+    }
+    const last = await this._recorder.stop();
+    this._syncLastRunUi();
+    return last;
+  }
+
+  /** @returns {{ url: string, name: string, bytes: number, duration: number, mime: string } | null} */
+  getLastRun() {
+    return this._recorder?.last ?? null;
+  }
+
+  _syncLastRunUi() {
+    const last = this._recorder?.last;
+    if (!this.lastRunEl) return;
+    if (!last?.url) {
+      this.lastRunEl.hidden = true;
+      if (this.lastRunLink) {
+        this.lastRunLink.removeAttribute('href');
+        this.lastRunLink.removeAttribute('download');
+      }
+      if (this.lastRunMeta) this.lastRunMeta.textContent = '';
+      return;
+    }
+    this.lastRunEl.hidden = false;
+    if (this.lastRunLink) {
+      this.lastRunLink.href = last.url;
+      this.lastRunLink.download = last.name;
+      this.lastRunLink.textContent = 'Download last run';
+    }
+    if (this.lastRunMeta) {
+      this.lastRunMeta.textContent =
+        `${formatDuration(last.duration)} · ${formatBytes(last.bytes)} · local only`;
+    }
   }
 
   /** Open the shell as the pause / settings menu (Resume CTA). */
@@ -809,6 +895,21 @@ export class LoadScreen {
     });
   }
 
+  _bindRecordToggle() {
+    if (!this.recordInput) return;
+    this.recordInput.checked = !!this.prefs.recordRun;
+    if (!this._recorder.supported) {
+      this.recordInput.disabled = true;
+      this.recordInput.checked = false;
+      this.prefs.recordRun = false;
+    }
+    this.recordInput.addEventListener('change', () => {
+      this.prefs.recordRun = !!this.recordInput.checked;
+      this._persistPrefs();
+      this._sfx('tick', 0.55);
+    });
+  }
+
   _applyFullscreenToInput() {
     if (this.fullscreenInput) this.prefs.fullscreen = !!this.fullscreenInput.checked;
     if (this._input) this._input.wantFullscreen = !!this.prefs.fullscreen;
@@ -893,6 +994,9 @@ export class LoadScreen {
     if (this.volInput) this.volInput.value = String(this.prefs.masterVol);
     if (this.volVal) this.volVal.textContent = `${Math.round(this.prefs.masterVol * 100)}%`;
     if (this.fullscreenInput) this.fullscreenInput.checked = !!this.prefs.fullscreen;
+    if (this.recordInput && !this.recordInput.disabled) {
+      this.recordInput.checked = !!this.prefs.recordRun;
+    }
     if (this.invertHost) {
       for (const b of this.invertHost.querySelectorAll('button[data-inv]')) {
         b.classList.toggle('is-on', (b.dataset.inv === '1') === !!this.prefs.invertY);
@@ -920,6 +1024,7 @@ export class LoadScreen {
       invertY: this.prefs.invertY,
       masterVol: this.prefs.masterVol,
       fullscreen: !!this.prefs.fullscreen,
+      recordRun: !!this.prefs.recordRun,
       quality: this.prefs.quality ?? this._selectedQuality,
     });
   }
