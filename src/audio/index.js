@@ -755,9 +755,11 @@ export class AudioSystem {
       radius: p.radius ?? 6, level: 1,
     }, 'weapons', 1);
     this.mixer.duck(0.85, 0.35);
-    // Concussion: total inside ~4 m, nothing past ~22 m.
-    const near = clamp(1 - dist / 22, 0, 1);
-    if (near > 0.1) this.mixer.concuss(Math.pow(near, 1.4));
+    // Concussion / tinnitus only inside the blast radius — same envelope as
+    // player explosion suppression (falloff hits 0 at `radius`).
+    const r = Math.max(0.5, p.radius ?? 6);
+    const near = clamp(1 - dist / r, 0, 1);
+    if (near > 0) this.mixer.concuss(Math.pow(near, 1.4));
   }
 
   _onFootstep(p) {

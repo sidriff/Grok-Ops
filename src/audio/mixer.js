@@ -235,14 +235,27 @@ export class Mixer {
     this._startTinnitus(level);
   }
 
+  /**
+   * Ring length: full punch up close (~11 s), about half that at the edge of
+   * the blast (~2 s base). Far hits used to sit on a long 4 s floor.
+   */
+  _tinnitusDuration(level) {
+    // 2 + 9*level → edge ~2 s, centre ~11 s (was 4 + 7*level, edge ~4 s).
+    return 2 + 9 * clamp(level, 0, 1);
+  }
+
   _startTinnitus(level) {
     const actx = this.actx;
     const t = actx.currentTime;
+    const dur = this._tinnitusDuration(level);
+    // Fade lead scales with length so a 2 s edge ring is not still fading from a 3.5 s window.
+    const fadeLead = Math.min(3.5, Math.max(0.45, dur * 0.55));
     if (this._tin) {
       // Re-trigger: just push the envelope back up.
       this._tin.g.gain.cancelScheduledValues(t);
       this._tin.g.gain.setTargetAtTime(0.05 * level, t, 0.03);
-      this._tin.until = t + 4 + 7 * level;
+      this._tin.until = t + dur;
+      this._tin.fadeLead = fadeLead;
       return;
     }
     const g = gain(actx, 0);
@@ -262,7 +275,12 @@ export class Mixer {
     g.connect(this.masterSum); // post-muffle on purpose
     o1.start(t); o2.start(t); o3.start(t); lfo.start(t);
     g.gain.setTargetAtTime(0.05 * level, t, 0.03);
-    this._tin = { g, nodes: [o1, o2, o3, lfo, g1, g2, g3, lfoG], until: t + 4 + 7 * level };
+    this._tin = {
+      g,
+      nodes: [o1, o2, o3, lfo, g1, g2, g3, lfoG],
+      until: t + dur,
+      fadeLead,
+    };
   }
 
   /** Per-frame housekeeping: duck recovery, deafening recovery, tinnitus teardown. */
@@ -295,7 +313,10 @@ export class Mixer {
     }
 
     if (this._tin) {
-      if (t > this._tin.until - 3.5) this._tin.g.gain.setTargetAtTime(0, t, 1.1);
+      const lead = this._tin.fadeLead ?? 3.5;
+      if (t > this._tin.until - lead) {
+        this._tin.g.gain.setTargetAtTime(0, t, Math.min(1.1, lead * 0.35));
+      }
       if (t > this._tin.until) {
         for (const n of this._tin.nodes) {
           try { n.stop?.(t); } catch { /* already stopped */ }
