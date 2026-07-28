@@ -243,6 +243,9 @@ export class UiSystem {
       if (!this._isPlayerSource(e.source)) return;
       // Don't celebrate teamkilling a blue.
       if (e.target?.team === 0 || e.target?.friendly === true) return;
+      // Corpse dump / overkill after death: kill shot still has killed=true.
+      // Anything else on a dead target is silent (no floater, no hitmarker).
+      if (e.target && e.target.alive === false && !e.killed) return;
       const kind = e.killed ? 'kill' : e.headshot ? 'head' : e.armour ? 'armour' : 'hit';
       this.hitmarker(kind);
       if (e.point) {

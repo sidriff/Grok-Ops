@@ -743,7 +743,10 @@ export class PhysicsSystem {
     p.source = this._shotSource ?? null;
     this.ctx.events.emit('bullet:impact', p);
 
-    if (p.actor && !exit) {
+    // Live actors only — ragdoll raycasts still set `actor` (the corpse owner)
+    // so we can impulse the doll, but dumping rounds into a body must not
+    // re-fire damage:dealt (floaters / hitmarkers / XP).
+    if (p.actor && !exit && p.actor.alive !== false) {
       this.ctx.events.emit('damage:dealt', {
         target: p.actor,
         amount: damage * (hit?.collider?.damageScale ?? 1),
