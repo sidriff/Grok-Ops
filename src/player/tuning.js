@@ -304,7 +304,7 @@ export const DEATH = {
   camPull: 0.95,
   /** FOV while dead — tighter than hip FOV so the kill scene fills the frame. */
   camFov: 54,
-  /** Soft follow on the overhead orbit (ragdoll thrash damping). */
+  /** Soft follow on the overhead orbit (settles after the blend). */
   bodySmooth: 8,
   /**
    * Killer look-at follow rate. Higher = stickier track as they strafe.

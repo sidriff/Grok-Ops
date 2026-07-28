@@ -2,9 +2,9 @@
  * Death cam + respawn countdown.
  *
  * On lethal damage the player system freezes input, drops a third-person
- * corpse, and hands the world camera to this controller. It sits above the
- * body and *continuously* tracks the killer (live position every frame) until
- * the countdown expires and the player is sent back through spawn logic.
+ * corpse, and hands the world camera to this controller. The orbit parks at
+ * the death pose (not the thrashing ragdoll) and *continuously* tracks the
+ * killer until the countdown expires and the player respawns.
  */
 
 import * as THREE from 'three';
@@ -114,13 +114,14 @@ export class DeathCam {
     this.timer = Math.max(0, this.timer - dt);
     this.blend = Math.min(1, this.blend + dt / Math.max(1e-3, DEATH.camBlend));
 
-    this._trackBody();
     // Always re-sample the killer — they keep moving during the death cam.
+    // Body stays parked at the death pose from begin() so ragdoll thrash
+    // does not drag the orbit root around.
     this._hasKiller = this._sampleKiller(this._killerPos) || this._hasKiller;
     this._desiredLook.copy(this._hasKiller ? this._killerPos : this.look);
 
     // Overhead stand-off, biased toward the *live* killer so orbit keeps up
-    // as they strafe around the body.
+    // as they strafe around the death pose.
     this._tmp.copy(this._desiredLook).sub(this.body);
     this._tmp.y = 0;
     if (this._tmp.lengthSq() < 1e-4) this._tmp.set(0, 0, -1);
@@ -155,24 +156,6 @@ export class DeathCam {
     }
 
     return this.timer <= 0;
-  }
-
-  _trackBody() {
-    const c = this.corpse;
-    const rd = c?.ragdoll ?? c?.__ragdoll ?? null;
-    if (rd?.aabb) {
-      const a = rd.aabb;
-      this.body.set(
-        (a.minx + a.maxx) * 0.5,
-        (a.miny + a.maxy) * 0.5,
-        (a.minz + a.maxz) * 0.5
-      );
-      return;
-    }
-    if (c?.position) {
-      this.body.copy(c.position);
-      this.body.y += 0.9;
-    }
   }
 
   /**
