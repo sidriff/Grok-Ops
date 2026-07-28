@@ -1,9 +1,11 @@
-import { el, setText, setStyle, clamp, Pool, mmss } from './util.js';
+import { el, setText, setStyle, setClass, clamp, Pool, mmss } from './util.js';
 
 const SPAN_DEG = 120; // degrees visible across the strip
 const STRIP_W = 470; // css px at k=1, must match .ow-compass width
 const PPD = STRIP_W / SPAN_DEG;
 const CARD = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+/** Letter objectives + up to 3 squad allies. */
+const COMPASS_SLOTS = 8;
 
 /**
  * Heading strip, top centre.
@@ -32,7 +34,7 @@ export class Compass {
     setStyle(this.strip, 'width', `calc(${(720 * PPD).toFixed(0)}px * var(--k))`);
 
     this.objPool = new Pool(
-      5,
+      COMPASS_SLOTS,
       () => el('div', 'ow-compass-obj'),
       this.root
     );
@@ -43,7 +45,7 @@ export class Compass {
 
   /**
    * @param {number} heading degrees, 0 = north, clockwise
-   * @param {Array} objectives [{ bearing:deg, label:'A', color }]
+   * @param {Array} objectives [{ bearing:deg, label:'A', color, kind?:'friend' }]
    */
   update(heading, objectives) {
     this.k = this.k || 1;
@@ -67,11 +69,18 @@ export class Compass {
           it.alive = true;
           setStyle(it.node, 'display', '');
         }
-        const px = clamp(rel * PPD * k, -half + 8 * k, half - 8 * k);
-        setText(it.node, o.label ?? '');
+        const friend = o.kind === 'friend';
+        const edge = friend ? 5 * k : 8 * k;
+        const px = clamp(rel * PPD * k, -half + edge, half - edge);
+        setClass(it.node, 'friend', friend);
+        setText(it.node, friend ? '' : (o.label ?? ''));
         setStyle(it.node, 'left', '50%');
         setStyle(it.node, 'transform', `translateX(calc(-50% + ${px.toFixed(1)}px))`);
-        setStyle(it.node, 'background', o.color ?? 'var(--cyan)');
+        setStyle(
+          it.node,
+          'background',
+          o.color ?? (friend ? 'var(--friend)' : 'var(--cyan)')
+        );
         setStyle(it.node, 'opacity', Math.abs(rel) > SPAN_DEG * 0.5 ? '0.45' : '1');
       }
     }

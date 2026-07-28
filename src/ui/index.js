@@ -966,11 +966,35 @@ export class UiSystem {
       const dx = o.position.x - pos.x;
       const dz = o.position.z - pos.z;
       const bearing = (Math.atan2(dx, -dz) * 180) / Math.PI;
-      out.push(o._cmp ?? (o._cmp = { bearing: 0, label: o.label, color: o.color }));
+      out.push(o._cmp ?? (o._cmp = { bearing: 0, label: o.label, color: o.color, kind: 'obj' }));
       const last = out[out.length - 1];
       last.bearing = bearing;
       last.label = o.label;
       last.color = o.color;
+      last.kind = 'obj';
+    }
+
+    // Living allies (always plotted on minimap) also pin on the compass strip.
+    const allyPool = this._allyCmp ?? (this._allyCmp = []);
+    let ai = 0;
+    for (let i = 0; i < this._blipCount; i++) {
+      const b = this._blips[i];
+      if (b.kind !== 'friend') continue;
+      const dx = b.x - pos.x;
+      const dz = b.z - pos.z;
+      const bearing = (Math.atan2(dx, -dz) * 180) / Math.PI;
+      let cmp = allyPool[ai];
+      if (!cmp) {
+        cmp = allyPool[ai] = {
+          bearing: 0,
+          label: '',
+          color: 'var(--friend)',
+          kind: 'friend',
+        };
+      }
+      cmp.bearing = bearing;
+      out.push(cmp);
+      ai++;
     }
     return out;
   }
