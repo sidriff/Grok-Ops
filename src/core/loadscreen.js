@@ -288,7 +288,7 @@ export class LoadScreen {
     if (this.pctEl) this.pctEl.textContent = '—';
     if (this.fillEl) this.fillEl.style.width = '0%';
     if (this.qLabel) this.qLabel.textContent = 'Graphics';
-    if (this.kickerEl) this.kickerEl.textContent = 'Operator Briefing';
+    if (this.kickerEl) this.kickerEl.textContent = 'Claude of Duty:';
     if (this.hintEl) {
       const rec = this._recommended.toUpperCase();
       this.hintEl.textContent = gpuLabel
@@ -335,7 +335,7 @@ export class LoadScreen {
     if (this.pctEl) this.pctEl.textContent = '0%';
     if (this.labelEl) this.labelEl.textContent = 'Loading…';
     if (this.hintEl) this.hintEl.textContent = 'Building the AO';
-    if (this.kickerEl) this.kickerEl.textContent = 'Operator Briefing';
+    if (this.kickerEl) this.kickerEl.textContent = 'Claude of Duty:';
     if (meta != null) this.setMeta(meta);
     this.root.classList.remove('boot-ready');
     this._menuAudio.startMusic();
@@ -413,7 +413,7 @@ export class LoadScreen {
     if (this.pctEl) this.pctEl.textContent = '100%';
     if (this.labelEl) this.labelEl.textContent = 'Ready';
     if (this.hintEl) this.hintEl.textContent = 'Enter · Space · Click Deploy';
-    if (this.kickerEl) this.kickerEl.textContent = 'Operator Briefing';
+    if (this.kickerEl) this.kickerEl.textContent = 'Claude of Duty:';
     if (meta != null && this.metaEl) this.metaEl.textContent = meta;
     this._setActionButton('deploy');
     this.deployBtn?.focus?.({ preventScroll: true });
@@ -445,7 +445,7 @@ export class LoadScreen {
     if (this.pctEl) this.pctEl.textContent = '100%';
     if (this.labelEl) this.labelEl.textContent = 'Ready';
     if (this.hintEl) this.hintEl.textContent = 'Enter · Space · Click Deploy';
-    if (this.kickerEl) this.kickerEl.textContent = 'Operator Briefing';
+    if (this.kickerEl) this.kickerEl.textContent = 'Claude of Duty:';
     if (this.qLabel) this.qLabel.textContent = 'Graphics (locked)';
     if (meta != null) this.setMeta(meta);
     else if (this._selectedQuality) {

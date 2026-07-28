@@ -1,6 +1,6 @@
 # Grok Ops
 
-### Five Minute Firefight
+### Five Minute Survival
 
 **Grok Ops** is a [fork](https://github.com/sidriff/Grok-Ops) of the
 one-shot [Claude of Duty](https://github.com/mshumer/Claude-of-Duty) by
@@ -67,7 +67,7 @@ or bringing dead code to life until the fight holds up.
 - **Event / fire fixes** — nested damage no longer kills the bus; AI shots don’t kick the player reticle; live fire after prewarm actually runs
 
 ### Boot · menu · music
-- Instant **Operator Briefing** shell — paints before any game module loads. One layout from first frame: blurb, progress, graphics (or weapons after Load), controls, settings, leaderboard, CTA. No black void, no “phase swap” jank.
+- Instant **main menu** shell — paints before any game module loads. One layout from first frame: blurb, progress, graphics (or weapons after Load), controls, settings, leaderboard, CTA. No black void, no “phase swap” jank.
 - **Load → prewarm → Deploy** — pick a quality tier with plain-English cards, then build the AO while you fiddle sens / FOV / invert / volume. Esc reopens the **same shell** as pause / Resume; Retreat returns here without a full reload.
 - **Procedural menu music** (`src/audio/menu.js`) — no sample packs. Sparse ~68 BPM A-minor “ops room” bed: low drone, soft air noise, a handful of dry motif notes. Intentionally understated so UI clicks have space. Starts on title load so a cold boot **proves the app has sound** (gesture unlock if the browser blocks autoplay).
 - **UI beeps** from the same synth — click / select / confirm (short rising triad for Load · Deploy · Resume), open/close swells, soft slider ticks. Master volume is shared with the in-game mixer.
