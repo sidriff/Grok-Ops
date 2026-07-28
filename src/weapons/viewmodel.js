@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Arm, HAND_POSES } from './hands.js';
 import { buildClips, makeSampleResult } from './clips.js';
-import { triCount, mergeAll } from './geometry.js';
+import { triCount } from './geometry.js';
 import {
   Spring,
   Spring3,
@@ -170,63 +170,32 @@ export class Viewmodel {
     this.reticle.name = 'ow-reticle';
     this.anchor.add(this.reticle);
     /**
-     * A 2 MOA dot with a soft halo, a dark keyline and a 12-segment outer ring.
+     * Clean 2–3 MOA pin: core + tight halo + dark keyline. No segmented
+     * circle-dot ring — that read as a huge dotted line in ADS.
      *
-     * All four are authored at UNIT radius and scaled together by the dot's
-     * angular size in `_updateReticle`, so the whole reticle is one shape that
-     * grows and shrinks as a unit — proportions can never drift.
+     * All three are authored at UNIT radius and scaled together by the
+     * angular size in `_updateReticle`. Geometry uses 64 segments so the
+     * edge stays round when the whole thing is only a few pixels across.
      *
-     *   core     the emitter. 0xff1a08 at intensity 1.35, and the intensity is
-     *            measured — twice, because the first analysis was wrong.
-     *
-     *            The old note here reasoned about how much GREEN the emitter adds
-     *            and concluded 3.2 was safe. It is not, and the reason is the tone
-     *            curve, not the additive maths: the frame is graded with AgX (see
-     *            render/composite.js), and AgX's whole signature is that it
-     *            DESATURATES as it approaches display white. A pixel whose red
-     *            channel is 3.2 over a mid-grey background comes out of the curve
-     *            at rgb(255,248,239) whatever its green and blue were — measured on
-     *            ads.png, a white dot, exactly what the previous note said it had
-     *            fixed. There is no colour available up there.
-     *            0.95 keeps the core on the near-linear part of the curve, where a
-     *            saturated red stays a saturated red, and the halo + ring below are
-     *            what carry the "it is an emitter" read instead of raw radiance.
-     *   halo     1.6x the core radius, ~6% alpha. This is the bloom seed and the
-     *            reason the dot looks like it is BEHIND glass. It has to stay
-     *            tight; the old 0.0095 rad / 0.34 alpha halo was 23 px across and
-     *            was what actually read on screen — a soft salmon blob.
-     *   rim      a NORMALLY blended dark keyline. Additive blending cannot draw
-     *            anything darker than what is behind it, so without a separate
-     *            ring the dot dissolves the moment it crosses a blown-out sky.
-     *   ring     12 arc segments at 3.2x the dot radius, 35% of its radiance.
-     *            A bare dot at 8 px is indistinguishable from a dead subpixel;
-     *            the segmented ring is what makes it read as an EMITTER, and it
-     *            is the standard 65 MOA circle-dot every modern sight ships.
+     *   core   saturated red emitter (AgX-safe intensity — see materials)
+     *   halo   1.45× core, very low alpha — bloom seed, not a salmon blob
+     *   rim    normally-blended dark keyline so the pin survives blown sky
      */
-    const core = new THREE.CircleGeometry(1, 32);
-    const halo = new THREE.CircleGeometry(1.6, 32);
-    const rim = new THREE.RingGeometry(1, 1.42, 32, 1);
-    const RING_SEGS = 12;
-    const ringArcs = [];
-    for (let i = 0; i < RING_SEGS; i++) {
-      const a0 = (i / RING_SEGS) * TAU;
-      ringArcs.push(new THREE.RingGeometry(2.98, 3.42, 4, 1, a0, (TAU / RING_SEGS) * 0.56));
-    }
-    const ring = mergeAll(ringArcs);
-    this._reticleGeo = [core, halo, rim, ring];
+    const SEG = 64;
+    const core = new THREE.CircleGeometry(1, SEG);
+    const halo = new THREE.CircleGeometry(1.45, SEG);
+    const rim = new THREE.RingGeometry(0.92, 1.28, SEG, 1);
+    this._reticleGeo = [core, halo, rim];
     this.dotCore = new THREE.Mesh(core, mats.reticle(0xff1206, 0.95));
     this.dotHalo = new THREE.Mesh(halo, mats.reticle(0xff2a0c, 0.34));
     this.dotRim = new THREE.Mesh(rim, mats.reticleOutline(0.85));
-    this.dotRing = new THREE.Mesh(ring, mats.reticle(0xff1206, 0.95 * 0.5));
     this.dotHalo.renderOrder = 19;
     this.dotRim.renderOrder = 20;
-    this.dotRing.renderOrder = 20;
     this.dotCore.renderOrder = 21;
     this.reticle.add(this.dotHalo);
     this.reticle.add(this.dotRim);
-    this.reticle.add(this.dotRing);
     this.reticle.add(this.dotCore);
-    for (const m of [this.dotCore, this.dotHalo, this.dotRim, this.dotRing]) {
+    for (const m of [this.dotCore, this.dotHalo, this.dotRim]) {
       m.frustumCulled = false;
       m.userData.owNoPrepass = true;
       m.userData.owNoShadow = true;
@@ -1005,32 +974,21 @@ export class Viewmodel {
     this.reticle.position.copy(_v2);
     this.reticle.lookAt(this.anchor.getWorldPosition(_v));
     /**
-     * SIZE. Angular, so it is FOV-independent within a stance — but not constant
-     * across stances, because the requirement is a fixed number of PIXELS.
-     *
-     * A geometrically honest 2 MOA emitter subtends 0.58 mrad, which at the
-     * viewmodel camera's 0.97 mrad/px (60 deg over 1080 px) is 0.6 px: a dead
-     * subpixel, which is exactly what the old 0.0012 rad dot measured as. Every
-     * shipped red dot cheats this, and cheats it in the same direction — the
-     * reticle is drawn at a legible size and grows as you come into the glass,
-     * because that is the perceptual experience of putting your eye behind a
-     * collimator. So:
-     *   hipfire  0.00385 rad -> 4.0 px radius,  7.9 px dot
-     *   ADS      0.00655 rad -> 7.9 px radius, 15.7 px dot   (0.83 mrad/px)
-     * with the halo at 1.6x and the segmented ring at 3.2x, both scaled off the
-     * same number so the reticle never changes shape.
+     * SIZE. Angular, so FOV-independent within a stance. Still slightly
+     * larger than true 2 MOA (0.58 mrad ≈ 0.6 px) so it stays a readable pin,
+     * but far tighter than the old ~16 px ADS blob + 50 px segmented ring:
+     *   hipfire  0.00155 rad → ~1.6 px radius,  ~3.2 px pin
+     *   ADS      0.00235 rad → ~2.8 px radius,  ~5.6 px pin  (0.83 mrad/px)
      */
-    const coreR = s * lerp(0.00385, 0.00655, ads);
+    const coreR = s * lerp(0.00155, 0.00235, ads);
     this.dotCore.scale.setScalar(coreR);
     this.dotRim.scale.setScalar(coreR);
     this.dotHalo.scale.setScalar(coreR);
-    this.dotRing.scale.setScalar(coreR);
     this.dotCore.material.opacity = alpha;
-    this.dotRim.material.opacity = alpha * 0.8;
-    this.dotRing.material.opacity = alpha;
-    // The halo is a bloom seed, not a glow: 6% at 1.6x the core radius adds ~1 px
-    // of soft falloff and nothing else.
-    this.dotHalo.material.opacity = alpha * 0.06;
+    this.dotRim.material.opacity = alpha * 0.75;
+    // Tight bloom seed — just enough soft edge that the pin doesn't look like
+    // a hard polygon when it sits on sky.
+    this.dotHalo.material.opacity = alpha * 0.08;
   }
 
   /* ====================================================================== */
