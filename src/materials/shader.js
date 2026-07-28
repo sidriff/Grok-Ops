@@ -12,7 +12,15 @@ import * as THREE from 'three';
  *   - procedural weathering: top-face dust, rain streaks, ground splash
  *   - cavity grime and vertex-colour driven edge wear / dirt masks
  *
- * Everything is a #define so a material only pays for the features it enables.
+ * PROGRAM BUDGET (uber-shader pass)
+ *   Parallax / detile / weather / patch / cloth / macro-relief used to be
+ *   `#define`s, so every surface feature combo was a separate WebGL program
+ *   (× instancing × light count). Those features are always compiled now and
+ *   gated by uniforms (zero depth / coverage / amplitude = no-op).
+ *
+ *   Structural path defines remain — they change varyings or vertex layout:
+ *     OW_TRIPLANAR | OW_MESH_UV | OW_OBJECT_SPACE | OW_VCOL_MASKS |
+ *     OW_ALPHA_MASK | OW_NOGRAD
  *
  * Vertex colour mask contract (all default to 0 = "no effect", so a mesh with
  * no colour attribute is unaffected):
@@ -22,13 +30,11 @@ import * as THREE from 'three';
 const PARS_VERTEX = /* glsl */ `
 varying vec3 vOwWPos;
 varying vec3 vOwWNrm;
+varying vec3 vOwViewDirP;
 #ifdef OW_OBJECT_SPACE
   varying vec3 vOwOPos;
   varying vec3 vOwONrm;
   varying mat3 vOwP2V;
-#endif
-#ifdef OW_PARALLAX
-  varying vec3 vOwViewDirP;
 #endif
 `;
 
@@ -53,14 +59,9 @@ const MAIN_VERTEX = /* glsl */ `
     owR[ 1 ] = normalize( owR[ 1 ] );
     owR[ 2 ] = normalize( owR[ 2 ] );
     vOwP2V = mat3( viewMatrix ) * owR;
-  #endif
-
-  #ifdef OW_PARALLAX
-    #ifdef OW_OBJECT_SPACE
-      vOwViewDirP = ( inverse( owModel ) * vec4( cameraPosition, 1.0 ) ).xyz - transformed;
-    #else
-      vOwViewDirP = cameraPosition - owWP.xyz;
-    #endif
+    vOwViewDirP = ( inverse( owModel ) * vec4( cameraPosition, 1.0 ) ).xyz - transformed;
+  #else
+    vOwViewDirP = cameraPosition - owWP.xyz;
   #endif
 }
 `;
@@ -68,13 +69,11 @@ const MAIN_VERTEX = /* glsl */ `
 const PARS_FRAGMENT = /* glsl */ `
 varying vec3 vOwWPos;
 varying vec3 vOwWNrm;
+varying vec3 vOwViewDirP;
 #ifdef OW_OBJECT_SPACE
   varying vec3 vOwOPos;
   varying vec3 vOwONrm;
   varying mat3 vOwP2V;
-#endif
-#ifdef OW_PARALLAX
-  varying vec3 vOwViewDirP;
 #endif
 
 uniform sampler2D owDetailNrm;
@@ -340,25 +339,29 @@ const MAIN_FRAGMENT = /* glsl */ `
     vec2 ddy = dFdy( f.uv );
     vec2 uv = f.uv;
 
-    #ifdef OW_PARALLAX
-      #ifdef OW_MESH_UV
-        vec3 Vp = normalize( vViewPosition );
-      #else
-        vec3 Vp = normalize( vOwViewDirP );
-      #endif
-      vec3 vt = normalize( vec3( dot( Vp, f.T ), dot( Vp, f.B ), dot( Vp, f.N ) ) );
-      float pFade = 1.0 - smoothstep( owParallaxP.y, owParallaxP.z, owDist );
-      uv = owPOM( uv, vt, ddx, ddy, owParallaxP.x, pFade );
+    // Parallax always compiled; owParallaxP.x == 0 early-outs inside owPOM.
+    #ifdef OW_MESH_UV
+      vec3 Vp = normalize( vViewPosition );
+    #else
+      vec3 Vp = normalize( vOwViewDirP );
     #endif
+    vec3 vt = normalize( vec3( dot( Vp, f.T ), dot( Vp, f.B ), dot( Vp, f.N ) ) );
+    float pFade = 1.0 - smoothstep( owParallaxP.y, owParallaxP.z, owDist );
+    uv = owPOM( uv, vt, ddx, ddy, owParallaxP.x, pFade );
 
     alb = OW_TEX( map, uv, ddx, ddy );
     orm = OW_TEX( roughnessMap, uv, ddx, ddy ).rgb;
     nT = OW_TEX( normalMap, uv, ddx, ddy ).xyz * 2.0 - 1.0;
     nT.xy *= owNormalAmp;
 
-    #ifdef OW_DETILE
-      // Second sample of the same texture, rotated and rescaled, blended by a
-      // low-frequency mask: breaks the repeat without a second texture set.
+    // ---- micro detail normal, faded by distance ----
+    float detFade = 1.0 - smoothstep( owDetailP.w * 0.45, owDetailP.w, owDist );
+    owDetFade = detFade;
+    vec3 dn = OW_TEX( owDetailNrm, uv * owDetailP.x, ddx * owDetailP.x, ddy * owDetailP.x ).xyz * 2.0 - 1.0;
+    nT = normalize( vec3( nT.xy + dn.xy * owDetailP.y * detFade, nT.z ) );
+
+    // Detile always compiled; owRoughP.z (detile amount) == 0 skips the blend.
+    if ( owRoughP.z > 0.001 ) {
       vec2 uv2 = vec2( uv.x * 0.803 - uv.y * 0.596, uv.x * 0.596 + uv.y * 0.803 ) * 0.617
                + vec2( 0.37, 0.71 );
       vec2 ddx2 = vec2( ddx.x * 0.803 - ddx.y * 0.596, ddx.x * 0.596 + ddx.y * 0.803 ) * 0.617;
@@ -367,18 +370,10 @@ const MAIN_FRAGMENT = /* glsl */ `
       vec3 orm2 = OW_TEX( roughnessMap, uv2, ddx2, ddy2 ).rgb;
       vec3 n2 = OW_TEX( normalMap, uv2, ddx2, ddy2 ).xyz * 2.0 - 1.0;
       n2.xy *= owNormalAmp;
-    #endif
-
-    // ---- micro detail normal, faded by distance ----
-    float detFade = 1.0 - smoothstep( owDetailP.w * 0.45, owDetailP.w, owDist );
-    owDetFade = detFade;
-    vec3 dn = OW_TEX( owDetailNrm, uv * owDetailP.x, ddx * owDetailP.x, ddy * owDetailP.x ).xyz * 2.0 - 1.0;
-    nT = normalize( vec3( nT.xy + dn.xy * owDetailP.y * detFade, nT.z ) );
-    #ifdef OW_DETILE
       n2 = normalize( vec3( n2.xy + dn.xy * owDetailP.y * detFade, n2.z ) );
       float dtm = clamp( ( texture2D( owMacroTex, ( owP.xz + owP.y * 0.7 ) * owMacroP.x * 5.0 + 0.21 ).g - 0.36 ) * 2.4, 0.0, 1.0 );
       owHeightBlend( alb, orm, nT, alb2, orm2, n2, dtm * owRoughP.z );
-    #endif
+    }
     // Sub-millimetre aggregate / tooth / grit: the height channel of the shared
     // micro set drives an albedo speckle *and* the cavity height, so the layer
     // shades instead of just tinting.
@@ -428,7 +423,8 @@ const MAIN_FRAGMENT = /* glsl */ `
                        + ( mac1.a - 0.5 ) * 0.16
                        - owMicro * 0.07 * owDetFade, 0.0, 1.0 );
 
-  #ifdef OW_MACRO_RELIEF
+  // Macro relief always compiled; owMacroRelief == 0 skips the tilt.
+  if ( owMacroRelief > 0.001 ) {
     // Ruts, drifts and shallow patches at 1-4 m. The tile can't carry anything
     // this large, so the shading normal is tilted by the gradient of the macro
     // map — stones and swales then catch the sun instead of reading as dither.
@@ -440,15 +436,15 @@ const MAIN_FRAGMENT = /* glsl */ `
     tiltW -= owNw * dot( owNw, tiltW );
     nShade = normalize( nShade + mat3( viewMatrix ) * tiltW );
     alb.rgb *= 1.0 - ( mac1.b - 0.5 ) * 0.16 * owUpFace;
-  #endif
+  }
 
   // Horizontal coordinate along a wall, shared by the patch and runoff layers.
   float owVert = smoothstep( 0.72, 0.34, abs( owNw.y ) );
   float owSAxis = vOwWPos.z * owNw.x - vOwWPos.x * owNw.z;
 
   // ------------------------------------------------- repair patches ----
-  #ifdef OW_PATCH
-  {
+  // Always compiled; owPatchP.x (coverage) == 0 skips the work.
+  if ( owPatchP.x > 0.001 ) {
     // Somebody has replastered part of this wall. A repair is a RECTANGLE in the
     // plane of the facade, a few percent off the surrounding mix in value, a
     // little smoother because it is newer, and it has a trowel edge — a small
@@ -487,10 +483,10 @@ const MAIN_FRAGMENT = /* glsl */ `
       owHeightS = clamp( owHeightS + pm * 0.07 + lip * 0.05, 0.0, 1.0 );
     }
   }
-  #endif
 
   // ------------------------------------------------------ weathering ----
-  #ifdef OW_WEATHER
+  // Always compiled; zero dust/streak/splash uniforms no-op the expensive bits.
+  if ( ( owWeatherP.x + owWeatherP.y + owWeatherP.z ) > 0.001 ) {
     float up = clamp( owNw.y, 0.0, 1.0 );
     float dust = up * up * owWeatherP.x * smoothstep( 0.30, 0.80, mac1.b * 0.7 + mac2.g * 0.5 );
     alb.rgb = mix( alb.rgb, owDustCol, dust * 0.75 );
@@ -563,7 +559,7 @@ const MAIN_FRAGMENT = /* glsl */ `
     orm.b *= 1.0 - wedge * 0.9;
     // dust is loose powder: kill the sharp tile relief inside the wedge
     nShade = normalize( mix( nShade, normalize( owP2V * owNp ), wedge * 0.45 ) );
-  #endif
+  }
 
   // ------------------------------------------- cavity + vertex masks ----
   float cav = 1.0 - owHeightS;
@@ -595,7 +591,8 @@ const MAIN_FRAGMENT = /* glsl */ `
     orm.r *= 1.0 - vColor.b * owWearP.z;
   #endif
 
-  #ifdef OW_CLOTH
+  // Cloth always compiled; default cloth = (0,1,0,0) is a no-op.
+  if ( owClothP.x > 0.001 || owClothP.y < 0.999 || owClothP.z > 0.001 ) {
     // The underside of a stretched canopy is never the same value as its top: it
     // sits in its own shadow, it collects soot off the street, and the only sun
     // that reaches it comes through the weave. Matching the two values is what
@@ -615,7 +612,7 @@ const MAIN_FRAGMENT = /* glsl */ `
       nShade = normalize( nShade + vec3( tiltC.x, tiltC.y, 0.0 ) );
       alb.rgb *= 1.0 - ( f0 - 0.5 ) * owClothP.z * 0.9;
     }
-  #endif
+  }
 
   // ------------------------------------------------------------ tint ----
   alb.rgb *= owTintCol;
@@ -648,8 +645,8 @@ diffuseColor.rgb *= owAlbedo.rgb;
  * not glow.
  */
 const CLOTH_LIGHT = /* glsl */ `
-#if defined( OW_CLOTH ) && ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )
-{
+#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )
+if ( owClothP.x > 0.001 ) {
   vec3 owTrans = vec3( 0.0 );
   OW_CLOTH_LIGHT( 0 )
   #if NUM_DIR_LIGHTS > 1
@@ -844,16 +841,13 @@ export function extendMaterial(material, p, shared) {
     owMacroRelief: { value: p.macroRelief ?? 0 },
   };
 
+  // Structural path keys only. Feature layers (parallax/detile/weather/patch/
+  // cloth/macro-relief) are always in the shader and gated by uniforms so
+  // brick/plaster/asphalt/… share one program family per path.
   const defines = {};
   if (p.uvMode === 'triplanar') defines.OW_TRIPLANAR = '';
   else if (p.uvMode === 'mesh') defines.OW_MESH_UV = '';
   if (p.localSpace) defines.OW_OBJECT_SPACE = '';
-  if (p.parallax > 0 && p.uvMode !== 'triplanar') defines.OW_PARALLAX = '';
-  if (p.detile > 0 && p.uvMode !== 'triplanar') defines.OW_DETILE = '';
-  if (p.weather[0] > 0 || p.weather[1] > 0 || p.weather[2] > 0) defines.OW_WEATHER = '';
-  if ((p.patch?.[0] ?? 0) > 0) defines.OW_PATCH = '';
-  if ((p.cloth?.[0] ?? 0) > 0 || (p.cloth?.[1] ?? 1) < 1) defines.OW_CLOTH = '';
-  if ((p.macroRelief ?? 0) > 0) defines.OW_MACRO_RELIEF = '';
   if (p.vertexMasks) defines.OW_VCOL_MASKS = '';
   if (p.alphaMask) defines.OW_ALPHA_MASK = '';
   if (p.noGrad) defines.OW_NOGRAD = '';
@@ -862,7 +856,8 @@ export function extendMaterial(material, p, shared) {
   material.userData.owUniforms = u;
   material.userData.owParams = p;
 
-  const key = Object.keys(defines).sort().join('|');
+  // `u1` bumps the cache key so old define-sliced programs are not reused.
+  const key = 'u1|' + Object.keys(defines).sort().join('|');
   material.customProgramCacheKey = () => 'ow:' + key;
 
   material.onBeforeCompile = (shader) => {
