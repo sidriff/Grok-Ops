@@ -36,25 +36,57 @@ const STAGE_LABELS = {
   ready: 'Ready',
 };
 
-/** Attractive one-liners for the quality cards. */
+/**
+ * Copy + denser card meta for the quality grid (chips / cost bars / foot).
+ * Mirrors the arsenal cards so the 2×2 boxes don't look half-empty.
+ */
 export const QUALITY_BLURBS = {
   low: {
     tag: 'Fast boot',
     desc: 'Lower res, basic post. Boots quick so you can play and iterate — expect fewer fancy lights and reflections.',
+    chips: ['0.72× RES', '1K SHADOWS', 'BASIC POST', 'FAST BOOT'],
+    stats: { fidelity: 32, gpu: 28, boot: 92 },
+    foot: 'Iterate · laptop / integrated',
   },
   medium: {
     tag: 'Balanced',
     desc: 'TAA, ambient occlusion, volumetrics. Solid default for a real GPU without melting the fans.',
+    chips: ['TAA', 'AO', 'VOLUMETRICS', '2K SHADOWS'],
+    stats: { fidelity: 58, gpu: 52, boot: 68 },
+    foot: 'Default · mid-range discrete',
   },
   high: {
     tag: 'Full stack',
     desc: 'SSR, sharper scales, heavier particles. Needs a modern card for a smooth firefight.',
+    chips: ['SSR', 'FULL SCALE', 'HEAVY FX', '4 CASCADE'],
+    stats: { fidelity: 82, gpu: 78, boot: 42 },
+    foot: 'Firefight · modern discrete',
   },
   ultra: {
     tag: 'Max fidelity',
     desc: 'Biggest shadows, densest FX, capture baselines. Opt-in only — not the everyday boot.',
+    chips: ['4K SHADOWS', 'MAX FX', 'CAPTURE', 'OPT-IN'],
+    stats: { fidelity: 100, gpu: 96, boot: 22 },
+    foot: 'Capture · high-end only',
   },
 };
+
+/** Build the denser card body (chips + bars + foot) shared by static + fallback markup. */
+function qualityCardMetaHtml(blurb) {
+  const chips = (blurb?.chips ?? [])
+    .map((c) => `<span class="boot-q-chip">${c}</span>`)
+    .join('');
+  const s = blurb?.stats ?? { fidelity: 50, gpu: 50, boot: 50 };
+  return (
+    `<div class="boot-q-specs">${chips}</div>` +
+    `<div class="boot-q-stats" aria-hidden="true">` +
+    `<div class="boot-q-stat"><span>FIDELITY</span><div class="boot-q-bar"><i style="--v:${s.fidelity}%"></i></div></div>` +
+    `<div class="boot-q-stat"><span>GPU</span><div class="boot-q-bar"><i style="--v:${s.gpu}%"></i></div></div>` +
+    `<div class="boot-q-stat"><span>BOOT</span><div class="boot-q-bar"><i style="--v:${s.boot}%"></i></div></div>` +
+    `</div>` +
+    `<div class="boot-q-card-foot">${blurb?.foot ?? ''}</div>`
+  );
+}
 
 const PRESETS = ['low', 'medium', 'high', 'ultra'];
 const PREFS_KEY = 'grok-ops-boot-prefs';
@@ -697,7 +729,8 @@ export class LoadScreen {
         btn.innerHTML =
           `<div class="boot-q-name"><span>${name}</span>` +
           `<span class="boot-q-tag">${blurb?.tag ?? ''}</span></div>` +
-          `<div class="boot-q-desc">${blurb?.desc ?? ''}</div>`;
+          `<div class="boot-q-desc">${blurb?.desc ?? ''}</div>` +
+          qualityCardMetaHtml(blurb);
         host.appendChild(btn);
       }
       buttons = [...host.querySelectorAll('.boot-q-card[data-quality]')];

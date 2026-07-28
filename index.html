@@ -504,20 +504,86 @@
         font-weight: 600;
         white-space: nowrap;
       }
-      /* Fill the card like weapon blurbs — keeps tier boxes same height as arsenal. */
+      /* Grow so chips/bars/foot pin to the card bottom (arsenal density). */
       .boot-q-desc {
         flex: 1 1 auto;
         font-size: 0.58rem;
         letter-spacing: 0.03em;
         line-height: 1.4;
-        min-height: calc(1.4em * 4);
+        min-height: calc(1.4em * 3);
         text-transform: none;
         color: rgba(196, 210, 219, 0.55);
         overflow: hidden;
         display: -webkit-box;
         -webkit-box-orient: vertical;
-        -webkit-line-clamp: 6;
-        line-clamp: 6;
+        -webkit-line-clamp: 4;
+        line-clamp: 4;
+        margin-bottom: 0.35rem;
+      }
+      .boot-q-specs {
+        flex: 0 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.22rem;
+        margin-top: auto;
+      }
+      .boot-q-chip {
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+        font-size: 0.5rem;
+        letter-spacing: 0.05em;
+        color: rgba(255, 220, 160, 0.62);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(0, 0, 0, 0.25);
+        padding: 0.1rem 0.28rem;
+        white-space: nowrap;
+        text-transform: none;
+      }
+      .boot-q-card.is-on .boot-q-chip {
+        color: rgba(255, 220, 160, 0.88);
+        border-color: rgba(255, 176, 42, 0.28);
+        background: rgba(255, 176, 42, 0.08);
+      }
+      .boot-q-stats {
+        flex: 0 0 auto;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 0.18rem;
+        margin-top: 0.35rem;
+      }
+      .boot-q-stat {
+        display: grid;
+        grid-template-columns: 3.4rem 1fr;
+        align-items: center;
+        gap: 0.3rem;
+      }
+      .boot-q-stat span {
+        font-size: 0.48rem;
+        letter-spacing: 0.14em;
+        color: rgba(196, 210, 219, 0.38);
+      }
+      .boot-q-bar {
+        position: relative;
+        height: 2px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+      .boot-q-bar i {
+        display: block;
+        height: 100%;
+        width: var(--v, 50%);
+        background: linear-gradient(90deg, #ff9a12, #ffb02a 60%, #ffd078);
+        box-shadow: 0 0 6px rgba(255, 176, 42, 0.3);
+      }
+      .boot-q-card-foot {
+        flex: 0 0 auto;
+        margin-top: 0.28rem;
+        font-size: 0.5rem;
+        letter-spacing: 0.12em;
+        color: rgba(196, 210, 219, 0.34);
+        text-transform: none;
+      }
+      .boot-q-card.is-on .boot-q-card-foot {
+        color: rgba(255, 200, 120, 0.55);
       }
       /* Foot sits under the cards; stack height still tracks weapons via .boot-swap. */
       .boot-q-foot {
@@ -1104,18 +1170,66 @@
                 <button type="button" class="boot-q-card" data-quality="low" role="radio" aria-checked="false">
                   <div class="boot-q-name"><span>low</span><span class="boot-q-tag">Fast boot</span></div>
                   <div class="boot-q-desc">Lower res, basic post. Boots quick so you can play and iterate — expect fewer fancy lights and reflections.</div>
+                  <div class="boot-q-specs">
+                    <span class="boot-q-chip">0.72× RES</span>
+                    <span class="boot-q-chip">1K SHADOWS</span>
+                    <span class="boot-q-chip">BASIC POST</span>
+                    <span class="boot-q-chip">FAST BOOT</span>
+                  </div>
+                  <div class="boot-q-stats" aria-hidden="true">
+                    <div class="boot-q-stat"><span>FIDELITY</span><div class="boot-q-bar"><i style="--v:32%"></i></div></div>
+                    <div class="boot-q-stat"><span>GPU</span><div class="boot-q-bar"><i style="--v:28%"></i></div></div>
+                    <div class="boot-q-stat"><span>BOOT</span><div class="boot-q-bar"><i style="--v:92%"></i></div></div>
+                  </div>
+                  <div class="boot-q-card-foot">Iterate · laptop / integrated</div>
                 </button>
                 <button type="button" class="boot-q-card is-on" data-quality="medium" role="radio" aria-checked="true">
                   <div class="boot-q-name"><span>medium</span><span class="boot-q-tag">Balanced</span></div>
                   <div class="boot-q-desc">TAA, ambient occlusion, volumetrics. Solid default for a real GPU without melting the fans.</div>
+                  <div class="boot-q-specs">
+                    <span class="boot-q-chip">TAA</span>
+                    <span class="boot-q-chip">AO</span>
+                    <span class="boot-q-chip">VOLUMETRICS</span>
+                    <span class="boot-q-chip">2K SHADOWS</span>
+                  </div>
+                  <div class="boot-q-stats" aria-hidden="true">
+                    <div class="boot-q-stat"><span>FIDELITY</span><div class="boot-q-bar"><i style="--v:58%"></i></div></div>
+                    <div class="boot-q-stat"><span>GPU</span><div class="boot-q-bar"><i style="--v:52%"></i></div></div>
+                    <div class="boot-q-stat"><span>BOOT</span><div class="boot-q-bar"><i style="--v:68%"></i></div></div>
+                  </div>
+                  <div class="boot-q-card-foot">Default · mid-range discrete</div>
                 </button>
                 <button type="button" class="boot-q-card" data-quality="high" role="radio" aria-checked="false">
                   <div class="boot-q-name"><span>high</span><span class="boot-q-tag">Full stack</span></div>
                   <div class="boot-q-desc">SSR, sharper scales, heavier particles. Needs a modern card for a smooth firefight.</div>
+                  <div class="boot-q-specs">
+                    <span class="boot-q-chip">SSR</span>
+                    <span class="boot-q-chip">FULL SCALE</span>
+                    <span class="boot-q-chip">HEAVY FX</span>
+                    <span class="boot-q-chip">4 CASCADE</span>
+                  </div>
+                  <div class="boot-q-stats" aria-hidden="true">
+                    <div class="boot-q-stat"><span>FIDELITY</span><div class="boot-q-bar"><i style="--v:82%"></i></div></div>
+                    <div class="boot-q-stat"><span>GPU</span><div class="boot-q-bar"><i style="--v:78%"></i></div></div>
+                    <div class="boot-q-stat"><span>BOOT</span><div class="boot-q-bar"><i style="--v:42%"></i></div></div>
+                  </div>
+                  <div class="boot-q-card-foot">Firefight · modern discrete</div>
                 </button>
                 <button type="button" class="boot-q-card" data-quality="ultra" role="radio" aria-checked="false">
                   <div class="boot-q-name"><span>ultra</span><span class="boot-q-tag">Max fidelity</span></div>
                   <div class="boot-q-desc">Biggest shadows, densest FX, capture baselines. Opt-in only — not the everyday boot.</div>
+                  <div class="boot-q-specs">
+                    <span class="boot-q-chip">4K SHADOWS</span>
+                    <span class="boot-q-chip">MAX FX</span>
+                    <span class="boot-q-chip">CAPTURE</span>
+                    <span class="boot-q-chip">OPT-IN</span>
+                  </div>
+                  <div class="boot-q-stats" aria-hidden="true">
+                    <div class="boot-q-stat"><span>FIDELITY</span><div class="boot-q-bar"><i style="--v:100%"></i></div></div>
+                    <div class="boot-q-stat"><span>GPU</span><div class="boot-q-bar"><i style="--v:96%"></i></div></div>
+                    <div class="boot-q-stat"><span>BOOT</span><div class="boot-q-bar"><i style="--v:22%"></i></div></div>
+                  </div>
+                  <div class="boot-q-card-foot">Capture · high-end only</div>
                 </button>
               </div>
               <div class="boot-q-foot">
