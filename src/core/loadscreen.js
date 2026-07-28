@@ -405,8 +405,11 @@ export class LoadScreen {
    * @param {import('../audio/index.js').AudioSystem | null} audio
    */
   bindAudio(audio) {
+    this._gameAudio = audio || null;
     this._menuAudio.bindGameAudio(audio || null);
     this._menuAudio.setVolume(this.prefs.masterVol);
+    // Tap master bus for run capture (lazy — graph may not be up yet).
+    this._recorder.setAudioStreamSource(() => this._gameAudio?.getRecordStream?.() ?? null);
   }
 
   /**
@@ -547,25 +550,90 @@ export class LoadScreen {
   _syncLastRunUi() {
     const last = this._recorder?.last;
     if (!this.lastRunEl) return;
-    if (!last?.url) {
+    if (!last) {
       this.lastRunEl.hidden = true;
       if (this.lastRunLink) {
         this.lastRunLink.removeAttribute('href');
         this.lastRunLink.removeAttribute('download');
+        this.lastRunLink.onclick = null;
       }
       if (this.lastRunMeta) this.lastRunMeta.textContent = '';
+      this._setDownloadProgress(null);
       return;
     }
     this.lastRunEl.hidden = false;
     if (this.lastRunLink) {
-      this.lastRunLink.href = last.url;
-      this.lastRunLink.download = last.name;
+      // Click remuxes then downloads (raw MediaRecorder WebM cannot scrub).
+      this.lastRunLink.href = '#';
+      this.lastRunLink.removeAttribute('download');
       this.lastRunLink.textContent = 'Download last run';
+      this.lastRunLink.onclick = (e) => {
+        e.preventDefault();
+        void this.downloadLastRun();
+      };
     }
-    if (this.lastRunMeta) {
-      this.lastRunMeta.textContent =
-        `${formatDuration(last.duration)} · ${formatBytes(last.bytes)} · local only`;
+    if (this.lastRunMeta && !this._dlBusy) {
+      const bits = [
+        formatDuration(last.duration),
+        formatBytes(last.bytes),
+        last.hasAudio ? 'sound' : 'silent',
+        last.seekable ? 'seekable' : 'remux on save',
+        'local',
+      ];
+      this.lastRunMeta.textContent = bits.join(' · ');
     }
+  }
+
+  /**
+   * Remux (seekable WebM) + download. Shared by title shell and death card.
+   * @param {(p: number, label?: string) => void} [onProgress]
+   * @returns {Promise<object|null>} updated last-run meta
+   */
+  async downloadLastRun(onProgress) {
+    if (!this._recorder?.last || this._dlBusy) return this._recorder?.last ?? null;
+    this._dlBusy = true;
+    const report = (p, label) => {
+      this._setDownloadProgress(p, label);
+      onProgress?.(p, label);
+    };
+    report(0.05, 'Preparing…');
+    try {
+      await this._recorder.download((p, label) => {
+        report(p, label || 'Remuxing…');
+      });
+      report(1, 'Saved');
+      this._syncLastRunUi();
+      setTimeout(() => {
+        if (this._dlBusy) return;
+        this._setDownloadProgress(null);
+        this._syncLastRunUi();
+      }, 1600);
+      return this._recorder.last;
+    } catch (err) {
+      console.warn('[recorder] download failed', err);
+      report(1, 'Save failed');
+      throw err;
+    } finally {
+      this._dlBusy = false;
+    }
+  }
+
+  /**
+   * @param {number | null} p  0..1, null clears bar
+   * @param {string} [label]
+   */
+  _setDownloadProgress(p, label) {
+    const bar = this.lastRunEl?.querySelector('.boot-last-run-bar');
+    const fill = this.lastRunEl?.querySelector('.boot-last-run-fill');
+    if (this.lastRunMeta && label) this.lastRunMeta.textContent = label;
+    if (!bar || !fill) return;
+    if (p == null) {
+      bar.hidden = true;
+      fill.style.width = '0%';
+      return;
+    }
+    bar.hidden = false;
+    fill.style.width = `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`;
   }
 
   /** Open the shell as the pause / settings menu (Resume CTA). */

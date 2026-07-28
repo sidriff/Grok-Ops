@@ -19,7 +19,8 @@
     "@auth/core": "^0.41.3",
     "@convex-dev/auth": "^0.0.94",
     "convex": "^1.42.3",
-    "three": "^0.180.0"
+    "three": "^0.180.0",
+    "webm-duration-fix": "^1.0.4"
   },
   "devDependencies": {
     "jose": "^6.2.4",

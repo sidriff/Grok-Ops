@@ -419,6 +419,22 @@
         letter-spacing: 0.06em;
         text-transform: none;
       }
+      .boot-last-run-bar {
+        flex: 1 1 100%;
+        height: 3px;
+        margin-top: 0.15rem;
+        background: rgba(196, 210, 219, 0.12);
+        border-radius: 1px;
+        overflow: hidden;
+      }
+      .boot-last-run-bar[hidden] { display: none !important; }
+      .boot-last-run-fill {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #ffb02a, #ffe0a0);
+        transition: width 0.12s linear;
+      }
       @media (min-width: 520px) {
         .boot-fullscreen-sub {
           display: inline;
@@ -1557,6 +1573,9 @@
               <div class="boot-last-run" id="boot-last-run" hidden>
                 <a id="boot-last-run-link" href="#">Download last run</a>
                 <span class="boot-last-run-meta" id="boot-last-run-meta"></span>
+                <div class="boot-last-run-bar" hidden>
+                  <i class="boot-last-run-fill"></i>
+                </div>
               </div>
               <button type="button" id="boot-retreat" title="Back to menu">Retreat</button>
               <span class="boot-hint" id="boot-hint">Select a tier, then load</span>

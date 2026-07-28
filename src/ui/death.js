@@ -36,7 +36,16 @@ export class DeathOverlay {
     this.rec = el('div', 'ow-death-rec', this.panel);
     this.recLink = el('a', 'ow-death-rec-link', this.rec, 'Download run');
     this.recMeta = el('span', 'ow-death-rec-meta', this.rec);
-    this.recLink.addEventListener('click', (ev) => ev.stopPropagation());
+    this.recBar = el('div', 'ow-death-rec-bar', this.rec);
+    this.recFill = el('i', 'ow-death-rec-fill', this.recBar);
+    setStyle(this.recBar, 'display', 'none');
+    this.recLink.href = '#';
+    this.recLink.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (this._dlBusy) return;
+      this.onDownloadRun?.();
+    });
 
     this.actions = el('div', 'ow-death-actions', this.panel);
     this.retry = el('button', 'ow-death-retry', this.actions, 'RETRY');
@@ -62,6 +71,9 @@ export class DeathOverlay {
     this._endgame = false;
     this.onRetry = null;
     this.onRetreat = null;
+    this.onDownloadRun = null;
+    this._dlBusy = false;
+    this._lastRun = null;
     setStyle(this.root, 'display', 'none');
     setStyle(this.stats, 'display', 'none');
     setStyle(this.rec, 'display', 'none');
@@ -70,26 +82,45 @@ export class DeathOverlay {
 
   /**
    * Wire a local MediaRecorder blob from the title shell recorder.
-   * @param {{ url: string, name: string, bytes?: number, duration?: number } | null} last
+   * @param {{ url?: string, name: string, bytes?: number, duration?: number, hasAudio?: boolean, seekable?: boolean } | null} last
    */
   setLastRun(last) {
-    if (!last?.url) {
+    this._lastRun = last;
+    if (!last) {
       setStyle(this.rec, 'display', 'none');
-      this.recLink.removeAttribute('href');
-      this.recLink.removeAttribute('download');
       setText(this.recMeta, '');
+      this.setDownloadProgress(null);
       return;
     }
     // Only visible while the endgame panel is up.
     setStyle(this.rec, 'display', this._endgame ? 'flex' : 'none');
-    this.recLink.href = last.url;
-    this.recLink.download = last.name || 'grok-ops-run.webm';
+    this.recLink.href = '#';
     setText(this.recLink, 'Download run');
-    const bits = [];
-    if (last.duration != null) bits.push(formatDuration(last.duration));
-    if (last.bytes != null) bits.push(formatBytes(last.bytes));
-    bits.push('local');
-    setText(this.recMeta, bits.join(' · '));
+    if (!this._dlBusy) {
+      const bits = [];
+      if (last.duration != null) bits.push(formatDuration(last.duration));
+      if (last.bytes != null) bits.push(formatBytes(last.bytes));
+      bits.push(last.hasAudio ? 'sound' : 'silent');
+      bits.push(last.seekable ? 'seekable' : 'remux on save');
+      bits.push('local');
+      setText(this.recMeta, bits.join(' · '));
+    }
+  }
+
+  /**
+   * @param {number | null} p
+   * @param {string} [label]
+   */
+  setDownloadProgress(p, label) {
+    this._dlBusy = p != null && p < 1;
+    if (label) setText(this.recMeta, label);
+    if (p == null) {
+      setStyle(this.recBar, 'display', 'none');
+      setStyle(this.recFill, 'width', '0%');
+      return;
+    }
+    setStyle(this.recBar, 'display', 'block');
+    setStyle(this.recFill, 'width', `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`);
   }
 
   /**
@@ -121,7 +152,7 @@ export class DeathOverlay {
       setStyle(this.timer, 'display', endgame ? 'none' : '');
       // Keep a wired download visible on the score card; hide mid-death-cam.
       if (!endgame) setStyle(this.rec, 'display', 'none');
-      else if (this.recLink.getAttribute('href')) setStyle(this.rec, 'display', 'flex');
+      else if (this._lastRun) setStyle(this.rec, 'display', 'flex');
     }
 
     if (endgame) {

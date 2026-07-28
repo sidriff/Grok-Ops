@@ -116,6 +116,8 @@ export class UiSystem {
     // Soft retreat: title shell again, no reload / prewarm. Deploy starts a new run.
     this.death.onRetreat = () => this.retreatToMenu();
     this.menu.onRetreat = () => this.retreatToMenu();
+    // Remux + download the local run (progress on the death card).
+    this.death.onDownloadRun = () => this.downloadLastRun();
 
     this.health.onBeat = (i) => this.sfx('heartbeat', 0.35 + i * 0.5);
 
@@ -611,10 +613,29 @@ export class UiSystem {
 
   /**
    * Local run capture ready for download (death card + menu share the blob).
-   * @param {{ url: string, name: string, bytes?: number, duration?: number } | null} last
+   * @param {{ url?: string, name: string, bytes?: number, duration?: number, hasAudio?: boolean, seekable?: boolean } | null} last
    */
   setLastRun(last) {
     this.death.setLastRun?.(last);
+  }
+
+  /** Remux seekable WebM then download — progress on death card + title shell. */
+  async downloadLastRun() {
+    const boot = this.menu?.boot;
+    if (!boot?.downloadLastRun) return;
+    try {
+      const last = await boot.downloadLastRun((p, label) => {
+        this.death.setDownloadProgress?.(p, label);
+      });
+      if (last) this.death.setLastRun?.(last);
+      setTimeout(() => {
+        this.death.setDownloadProgress?.(null);
+        if (last) this.death.setLastRun?.(last);
+      }, 1600);
+    } catch (err) {
+      console.warn('[ui] run download failed', err);
+      this.death.setDownloadProgress?.(null, 'Save failed');
+    }
   }
 
   setHudVisible(v) {

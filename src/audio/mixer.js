@@ -69,6 +69,8 @@ export class Mixer {
     this.masterComp.connect(this.softClip);
     this.softClip.connect(this.masterGain);
     this.masterGain.connect(actx.destination);
+    /** @type {MediaStreamAudioDestinationNode | null} silent tap for run recording */
+    this._recordDest = null;
 
     /* ---- concussion / deafening path ----------------------------- */
     // Everything diegetic runs through this so a nearby explosion can muffle
@@ -333,6 +335,28 @@ export class Mixer {
     this.masterGain.gain.setTargetAtTime(this.masterVolume, this.actx.currentTime, 0.03);
   }
 
+  /**
+   * MediaStream of the master bus for MediaRecorder (game audio only).
+   * Taps in parallel with speakers — no double-volume, no extra latency.
+   * @returns {MediaStream | null}
+   */
+  getRecordStream() {
+    if (!this.actx || typeof this.actx.createMediaStreamDestination !== 'function') {
+      return null;
+    }
+    if (!this._recordDest) {
+      this._recordDest = this.actx.createMediaStreamDestination();
+      try {
+        this.masterGain.connect(this._recordDest);
+      } catch (err) {
+        console.warn('[audio] record tap failed', err);
+        this._recordDest = null;
+        return null;
+      }
+    }
+    return this._recordDest.stream;
+  }
+
   setBusVolume(name, v) {
     const b = this.buses[name];
     if (!b) return;
@@ -369,5 +393,11 @@ export class Mixer {
     this.muffleGain.disconnect();
     this.masterSum.disconnect(); this.preGain.disconnect(); this.masterComp.disconnect();
     this.softClip.disconnect(); this.masterGain.disconnect();
+    try {
+      this._recordDest?.disconnect?.();
+    } catch {
+      /* ignore */
+    }
+    this._recordDest = null;
   }
 }

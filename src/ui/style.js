@@ -696,6 +696,7 @@ const CSS = `
 .ow-death-rec {
   display:flex; flex-direction:column; align-items:center; gap: calc(var(--u) * 0.6);
   margin: calc(var(--u) * 1.6) 0 calc(var(--u) * 0.4);
+  width: min(280px, 80%);
 }
 .ow-death-rec-link {
   font-family: var(--fd); font-size: calc(11px * var(--k)); font-weight:700;
@@ -712,6 +713,16 @@ const CSS = `
 .ow-death-rec-meta {
   font-size: calc(9px * var(--k)); letter-spacing:.12em;
   color: var(--ink-3);
+  text-align:center;
+}
+.ow-death-rec-bar {
+  width:100%; height:3px; margin-top: calc(var(--u) * 0.4);
+  background: rgba(255,255,255,.1); border-radius:1px; overflow:hidden;
+}
+.ow-death-rec-fill {
+  display:block; height:100%; width:0%;
+  background: linear-gradient(90deg, #ffb02a, #ffe0a0);
+  transition: width .12s linear;
 }
 .ow-death-stat {
   font-size: calc(12px * var(--k)); letter-spacing:.28em; color: var(--ink-2);

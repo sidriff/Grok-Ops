@@ -586,6 +586,15 @@ export class AudioSystem {
     return ok;
   }
 
+  /**
+   * Master-bus MediaStream for local run capture. Null until the graph is up.
+   * @returns {MediaStream | null}
+   */
+  getRecordStream() {
+    if (!this.running) return null;
+    return this.mixer?.getRecordStream?.() ?? null;
+  }
+
   setMasterVolume(v) {
     this._pendingMaster = v;
     this.mixer?.setMasterVolume(v);
