@@ -92,23 +92,113 @@ export class Compass {
   }
 }
 
-/** Slim scoreline under the compass — sells "match in progress" in one line. */
+/** Tiny SVG person (blue ally) — same language as the boot leaderboard. */
+function personSvg() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 12 16');
+  svg.setAttribute('class', 'ow-match-ico ow-match-ico-ally');
+  svg.setAttribute('aria-hidden', 'true');
+  const head = document.createElementNS(ns, 'circle');
+  head.setAttribute('cx', '6');
+  head.setAttribute('cy', '3.2');
+  head.setAttribute('r', '2.4');
+  const body = document.createElementNS(ns, 'path');
+  body.setAttribute(
+    'd',
+    'M2.2 14.8 V9.2 C2.2 7.1 3.9 5.8 6 5.8 S9.8 7.1 9.8 9.2 V14.8'
+  );
+  svg.append(head, body);
+  return svg;
+}
+
+/** Tiny SVG tombstone (fallen ally). */
+function tombSvg() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 12 16');
+  svg.setAttribute('class', 'ow-match-ico ow-match-ico-tomb');
+  svg.setAttribute('aria-hidden', 'true');
+  const stone = document.createElementNS(ns, 'path');
+  stone.setAttribute(
+    'd',
+    'M3.2 14.5 V6.2 C3.2 4.1 4.5 2.8 6 2.8 S8.8 4.1 8.8 6.2 V14.5'
+  );
+  const base = document.createElementNS(ns, 'rect');
+  base.setAttribute('x', '2');
+  base.setAttribute('y', '13.2');
+  base.setAttribute('width', '8');
+  base.setAttribute('height', '1.8');
+  const crossV = document.createElementNS(ns, 'rect');
+  crossV.setAttribute('x', '5.55');
+  crossV.setAttribute('y', '5.2');
+  crossV.setAttribute('width', '0.9');
+  crossV.setAttribute('height', '4.2');
+  const crossH = document.createElementNS(ns, 'rect');
+  crossH.setAttribute('x', '4.2');
+  crossH.setAttribute('y', '6.4');
+  crossH.setAttribute('width', '3.6');
+  crossH.setAttribute('height', '0.9');
+  svg.append(stone, base, crossV, crossH);
+  return svg;
+}
+
+function fmtScore(n) {
+  const v = Math.max(0, Math.floor(Number(n) || 0));
+  return v.toLocaleString('en-US');
+}
+
+/**
+ * Slim scoreline under the compass.
+ * Survival: squad icons (people / tombs) · running score · countdown.
+ */
 export class MatchBar {
   constructor(parent) {
     this.root = el('div', 'ow-match', parent);
-    this.us = el('b', 'us', this.root, '43');
+
+    this.allies = el('div', 'ow-match-allies', this.root);
+    this._allySlots = [];
+    for (let i = 0; i < 3; i++) {
+      const slot = el('span', 'ow-match-slot', this.allies);
+      this._allySlots.push(slot);
+    }
+    this._allyAlive = -1;
+
     el('div', 'sep', this.root);
-    this.mode = el('div', null, this.root, 'TDM');
-    this.clock = el('div', 'clock', this.root, '4:12');
+    this.scoreLbl = el('div', 'ow-match-score-lbl', this.root, 'SCORE');
+    this.score = el('b', 'ow-match-score', this.root, '0');
     el('div', 'sep', this.root);
-    this.them = el('b', 'them', this.root, '38');
+    this.clock = el('div', 'clock', this.root, '5:00');
+
+    this._lastScore = -1;
+    this._lastClock = '';
   }
 
   update(s) {
-    setText(this.us, s.scoreUs ?? 0);
-    setText(this.them, s.scoreThem ?? 0);
-    setText(this.mode, s.mode ?? 'TDM');
-    setText(this.clock, mmss(s.timeLeft ?? 0));
+    const alive = Math.max(0, Math.min(3, Math.floor(s.alliesAlive ?? 0)));
+    if (alive !== this._allyAlive) {
+      this._allyAlive = alive;
+      for (let i = 0; i < 3; i++) {
+        const slot = this._allySlots[i];
+        slot.replaceChildren(i < alive ? personSvg() : tombSvg());
+      }
+      this.allies.title =
+        alive === 0
+          ? 'Squad wiped · 1× score mult'
+          : `${alive}/3 allies up · ${alive}× score mult`;
+    }
+
+    const score = s.score ?? s.scoreUs ?? 0;
+    if (score !== this._lastScore) {
+      this._lastScore = score;
+      setText(this.score, fmtScore(score));
+    }
+
+    const clock = mmss(s.timeLeft ?? 0);
+    if (clock !== this._lastClock) {
+      this._lastClock = clock;
+      setText(this.clock, clock);
+    }
   }
 
   dispose() {

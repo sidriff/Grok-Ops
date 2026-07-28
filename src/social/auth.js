@@ -6,6 +6,7 @@
 import { ConvexClient, ConvexHttpClient } from 'convex/browser';
 import { api } from '../../convex/_generated/api.js';
 import { getConvexUrl } from './config.js';
+import { OAUTH_MSG_TYPE, openOAuthPopup } from './oauth-popup.js';
 
 const JWT_KEY = '__convexAuthJWT';
 const REFRESH_KEY = '__convexAuthRefreshToken';
@@ -211,21 +212,15 @@ export class SocialAuth {
       },
     );
 
+    // Full-page OAuth return (fallback if popup blocked).
     const params = new URLSearchParams(location.search);
     const code = params.get('code');
-    if (code) {
+    if (code && !window.opener) {
       const url = new URL(location.href);
       url.searchParams.delete('code');
       history.replaceState({}, '', url.pathname + url.search + url.hash);
-
-      const verifier = this._get(VERIFIER_KEY) ?? undefined;
-      this._remove(VERIFIER_KEY);
       try {
-        const result = await this.http.action(api.auth.signIn, {
-          params: { code },
-          verifier,
-        });
-        if (result?.tokens) await this._setTokens(result.tokens);
+        await this._exchangeCode(code);
       } catch (err) {
         console.error('[social] OAuth code exchange failed', err);
       }
@@ -236,6 +231,15 @@ export class SocialAuth {
         this._wireAuth();
       }
     }
+
+    // Popup OAuth completes via postMessage from the callback window.
+    this._onOAuthMessage = (ev) => {
+      if (ev.origin !== location.origin) return;
+      const data = ev.data;
+      if (!data || data.type !== OAUTH_MSG_TYPE) return;
+      void this._onPopupOAuthMessage(data);
+    };
+    window.addEventListener('message', this._onOAuthMessage);
 
     this._unsubMe = this.client.onUpdate(
       api.users.me,
@@ -258,7 +262,51 @@ export class SocialAuth {
     }
   }
 
-  /** Start X OAuth redirect. */
+  async _exchangeCode(code) {
+    const verifier = this._get(VERIFIER_KEY) ?? undefined;
+    this._remove(VERIFIER_KEY);
+    const result = await this.http.action(api.auth.signIn, {
+      params: { code },
+      verifier,
+    });
+    if (result?.tokens) {
+      await this._setTokens(result.tokens);
+      return true;
+    }
+    throw new Error('No tokens returned from sign-in');
+  }
+
+  async _onPopupOAuthMessage(data) {
+    if (this._oauthBusy) return;
+    this._oauthBusy = true;
+    try {
+      if (data.error) {
+        const msg = data.errorDescription || data.error || 'X login cancelled';
+        console.warn('[social] OAuth error', msg);
+        this.error = msg;
+        this._emit();
+        return;
+      }
+      if (!data.code) return;
+      await this._exchangeCode(data.code);
+      console.info('[social] signed in via popup');
+    } catch (err) {
+      console.error('[social] popup code exchange failed', err);
+      this.error = String(err?.message ?? err);
+      this._emit();
+    } finally {
+      this._oauthBusy = false;
+      if (this._oauthWaiters) {
+        for (const w of this._oauthWaiters) w();
+        this._oauthWaiters = [];
+      }
+    }
+  }
+
+  /**
+   * Start X OAuth in a popup so the game stays open.
+   * Falls back to full-page redirect if popups are blocked.
+   */
   async signInWithX() {
     try {
       const result = await this.client.action(api.auth.signIn, {
@@ -267,7 +315,35 @@ export class SocialAuth {
       });
       if (result?.redirect) {
         if (result.verifier) this._set(VERIFIER_KEY, result.verifier);
-        location.href = result.redirect;
+        const redirectUrl =
+          typeof result.redirect === 'string'
+            ? result.redirect
+            : result.redirect.toString();
+
+        const popup = openOAuthPopup(redirectUrl);
+        if (!popup) {
+          // Popup blocked — last resort full navigation.
+          console.warn('[social] popup blocked; full-page redirect');
+          location.href = redirectUrl;
+          return;
+        }
+
+        // Resolve when popup closes or auth completes (best-effort).
+        await new Promise((resolve) => {
+          this._oauthWaiters = this._oauthWaiters || [];
+          this._oauthWaiters.push(resolve);
+          const poll = setInterval(() => {
+            if (popup.closed) {
+              clearInterval(poll);
+              resolve();
+            }
+          }, 400);
+          // Safety timeout 3 minutes
+          setTimeout(() => {
+            clearInterval(poll);
+            resolve();
+          }, 180000);
+        });
         return;
       }
       if (result?.tokens) {
@@ -275,6 +351,13 @@ export class SocialAuth {
       }
     } catch (err) {
       console.error('[social] signIn failed', err);
+      const msg = String(err?.message ?? err);
+      // Common: missing AUTH_TWITTER_ID / AUTH_TWITTER_SECRET on Convex.
+      if (/twitter|AUTH_|provider|configured|env/i.test(msg)) {
+        throw new Error(
+          'X login not configured — set AUTH_TWITTER_ID and AUTH_TWITTER_SECRET on the Convex deployment.',
+        );
+      }
       throw err;
     }
   }
@@ -313,6 +396,10 @@ export class SocialAuth {
   }
 
   dispose() {
+    if (this._onOAuthMessage) {
+      window.removeEventListener('message', this._onOAuthMessage);
+      this._onOAuthMessage = null;
+    }
     this._unsubBoard?.();
     this._unsubMe?.();
     this._unsubBoard = null;

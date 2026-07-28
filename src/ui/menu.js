@@ -38,12 +38,13 @@ export class PauseMenu {
     }
   }
 
-  /** Back to title menu (wired from UiSystem; defaults to reload). */
+  /** Back to title menu (soft retreat — no full reload when UiSystem is wired). */
   retreat() {
     if (typeof this.onRetreat === 'function') {
       this.onRetreat();
       return;
     }
+    // Fallback when boot shell isn't available.
     location.reload();
   }
 

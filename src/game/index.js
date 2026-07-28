@@ -103,8 +103,12 @@ export class GameSystem {
   /* public                                                             */
   /* ================================================================== */
 
-  /** Full match restart (Retry button / boot). */
-  restart() {
+  /**
+   * Full match restart (Retry button / Deploy after retreat).
+   * @param {{ capture?: boolean }} [opts]  set capture:false while the title
+   *   shell is still up (pointer-lock after enterPlaying).
+   */
+  restart({ capture = true } = {}) {
     this._teardownActors();
     this._resetPlayer();
     this._resetWeapons();
@@ -135,23 +139,53 @@ export class GameSystem {
     // Grab aim only when input is live. Boot freezes input under the title shell
     // (Load → Deploy); main captures on Deploy. Calling this earlier would
     // fullscreen mid-load if the Fullscreen checkbox is on.
-    if (this.ctx.input?.enabled) {
+    if (capture && this.ctx.input?.enabled) {
       this.ctx.input.capturePointerForGame?.({ lock: true });
     }
     console.info('[game] survival restart');
   }
 
+  /**
+   * Soft exit to the title shell: wipe combatants, freeze brains, leave
+   * assets warm so Deploy can start a new run without a page reload.
+   */
+  parkToMenu() {
+    this.phase = 'menu';
+    this._teardownActors();
+    const ai = this.ctx.peek('ai');
+    if (ai) ai.frozen = true;
+    const player = this.ctx.peek('player');
+    if (player?.deathCam?.active) {
+      player.respawn?.();
+      player.autoRespawn = false;
+    }
+    player?.setControlEnabled?.(false);
+    this.ctx.peek('ui')?.setEndgame?.(null);
+    console.info('[game] parked to menu');
+  }
+
+  /** Live board score: (time survived + combat pts) × allies still up (min 1×). */
+  _liveScore() {
+    const alliesAlive = this._countAlive(0);
+    const allyMult = Math.max(1, Math.min(3, alliesAlive));
+    const t = Math.floor(Math.min(this.duration, this.elapsed));
+    return (t + (this.combatPoints | 0)) * allyMult;
+  }
+
   getHudSnapshot() {
+    const alliesAlive = this._countAlive(0);
     return {
       mode: 'SURVIVE',
       timeLeft: Math.max(0, this.timeLeft),
+      score: this._liveScore(),
       scoreUs: this.kills,
       scoreThem: this._countAlive(1),
       phase: this.phase,
       kills: this.kills,
       allyKills: this.allyKills,
+      combatPoints: this.combatPoints,
       elapsed: this.elapsed,
-      alliesAlive: this._countAlive(0),
+      alliesAlive,
       intensity: this._intensity(this.elapsed),
     };
   }
@@ -516,11 +550,15 @@ export class GameSystem {
   _pushHud() {
     const ui = this.ctx.peek('ui');
     if (!ui?.setMatch) return;
+    const alliesAlive = this._countAlive(0);
     ui.setMatch({
       mode: 'SURVIVE',
       timeLeft: Math.max(0, this.timeLeft),
+      score: this._liveScore(),
       scoreUs: this.kills,
       scoreThem: this._countAlive(1),
+      alliesAlive,
+      combatPoints: this.combatPoints | 0,
     });
   }
 

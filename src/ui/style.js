@@ -433,16 +433,38 @@ const CSS = `
 .ow-match {
   position:absolute; left:50%; top:calc(var(--pad) * .7 + 45px * var(--k));
   transform: translateX(-50%);
-  display:flex; align-items:center; gap: calc(var(--u) * 2.5);
+  display:flex; align-items:center; gap: calc(var(--u) * 2.2);
   font-size: calc(11px * var(--k)); letter-spacing:.18em;
   color: var(--ink-2); text-shadow: var(--sh-o1);
 }
-.ow-match b { font-family: var(--fd); font-size: calc(19px * var(--k)); font-weight:700;
-  letter-spacing:.04em; }
-.ow-match .us { color: var(--friend); }
-.ow-match .them { color: var(--enemy); }
-.ow-match .clock { color: var(--ink); font-variant-numeric: tabular-nums; }
-.ow-match .sep { width:1px; height: calc(11px * var(--k)); background: var(--hair); }
+.ow-match-allies {
+  display:flex; align-items:center; gap: calc(var(--u) * 0.9);
+}
+.ow-match-slot {
+  display:inline-flex; width: calc(12px * var(--k)); height: calc(16px * var(--k));
+  line-height:0;
+}
+.ow-match-ico {
+  width:100%; height:100%; display:block;
+}
+.ow-match-ico-ally {
+  fill: rgba(143, 200, 255, 0.96);
+  filter: drop-shadow(0 0 3px rgba(100, 180, 255, 0.45));
+}
+.ow-match-ico-tomb {
+  fill: rgba(150, 160, 170, 0.5);
+}
+.ow-match-score-lbl {
+  font-size: calc(9px * var(--k)); letter-spacing:.28em; color: var(--ink-3);
+}
+.ow-match-score {
+  font-family: var(--fd); font-size: calc(19px * var(--k)); font-weight:700;
+  letter-spacing:.04em; color: var(--amber);
+  font-variant-numeric: tabular-nums;
+  text-shadow: var(--sh-o1);
+}
+.ow-match .clock { color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing:.08em; }
+.ow-match .sep { width:1px; height: calc(12px * var(--k)); background: var(--hair); }
 
 /* =============================================================== minimap */
 .ow-minimap {

@@ -48,7 +48,7 @@ const PING_LIFE = 1.35;
  *   ui.setObjectives([{position,label,name}])
  *   ui.setBlips([{x,z,kind:'enemy'|'friend'|'last',heading,alpha}])
  *   ui.spawnGrenade(worldPos, fuse)
- *   ui.setMatch({scoreUs,scoreThem,timeLeft,mode})
+ *   ui.setMatch({score,alliesAlive,timeLeft,mode,...})
  *   ui.setHudVisible(bool)              hide everything (cinematics)
  *   ui.pause() / ui.resume() / ui.menu.toggle()
  *   ui.debugState('combat'|'menu'|'clean')
@@ -113,12 +113,9 @@ export class UiSystem {
       if (typeof game?.restart === 'function') game.restart();
       else location.reload();
     };
-    // Full page reload returns to the title shell (boot is one-shot).
-    const retreatToMenu = () => {
-      location.reload();
-    };
-    this.death.onRetreat = retreatToMenu;
-    this.menu.onRetreat = retreatToMenu;
+    // Soft retreat: title shell again, no reload / prewarm. Deploy starts a new run.
+    this.death.onRetreat = () => this.retreatToMenu();
+    this.menu.onRetreat = () => this.retreatToMenu();
 
     this.health.onBeat = (i) => this.sfx('heartbeat', 0.35 + i * 0.5);
 
@@ -145,6 +142,9 @@ export class UiSystem {
       baseSpread: 5.5,
       scoreUs: 0,
       scoreThem: 0,
+      /** Running survival score (time + combat) × ally mult. */
+      score: 0,
+      combatPoints: 0,
       timeLeft: 300,
       mode: 'SURVIVE',
       dead: false,
@@ -157,7 +157,7 @@ export class UiSystem {
       timeSurvived: 0,
       kills: 0,
       allyKills: 0,
-      alliesAlive: 0,
+      alliesAlive: 3,
       /** true when no player/weapons subsystem is driving us (stub-safe demo) */
       simulate: false,
       time: 0,
@@ -513,6 +513,57 @@ export class UiSystem {
   }
 
   /**
+   * Back to the title shell without reloading the app.
+   * Assets stay compiled; next Deploy restarts the match.
+   */
+  retreatToMenu() {
+    const boot = this.menu?.boot;
+    if (!boot?.returnToTitle) {
+      location.reload();
+      return;
+    }
+    // Already sitting on the title shell (double-click / spam).
+    if (this.ctx.peek('game')?.phase === 'menu') return;
+
+    // Close pause bookkeeping without restoring sim / pointer lock.
+    if (this.menu.open) {
+      this.menu.open = false;
+      this.ctx.events.emit('ui:pause', { paused: false });
+    }
+
+    this.setEndgame(null);
+    this.ctx.peek('game')?.parkToMenu?.();
+
+    const time = this.ctx.time;
+    if (time) time.scale = 0;
+    const input = this.ctx.input;
+    if (input) {
+      input.enabled = false;
+      input.releasePointerForUi?.();
+    }
+    this.ctx.peek('player')?.setControlEnabled?.(false);
+    this.setHudVisible(false);
+
+    const q = this.ctx.config?.quality;
+    boot.returnToTitle({
+      meta: q ? `${String(q).toUpperCase()} · ready` : undefined,
+    });
+
+    // One-shot: Deploy → new survival run (no second prewarm).
+    void boot.waitForDeploy().then(async () => {
+      this.ctx.peek('ai')?.clearStage?.();
+      this.ctx.peek('weapons')?.clearDebugPose?.();
+      this.ctx.peek('game')?.restart?.({ capture: false });
+      if (time) time.scale = 1;
+      if (input) input.enabled = true;
+      this.ctx.peek('player')?.setControlEnabled?.(true);
+      this.setHudVisible(true);
+      await boot.enterPlaying?.({ immediate: false });
+      input?.capturePointerForGame?.({ lock: true });
+    });
+  }
+
+  /**
    * Survival score screen. Pass null to clear (Retry / new match).
    * @param {object|null} payload
    */
@@ -527,7 +578,9 @@ export class UiSystem {
       s.timeSurvived = 0;
       s.kills = 0;
       s.allyKills = 0;
-      s.alliesAlive = 0;
+      s.alliesAlive = 3;
+      s.score = 0;
+      s.combatPoints = 0;
       return;
     }
     s.endgame = true;
@@ -537,6 +590,8 @@ export class UiSystem {
     s.kills = payload.kills ?? 0;
     s.allyKills = payload.allyKills ?? 0;
     s.alliesAlive = payload.alliesAlive ?? 0;
+    s.score = payload.score ?? s.score ?? 0;
+    s.combatPoints = payload.combatPoints ?? s.combatPoints ?? 0;
     s.deathActive = true;
     s.dead = true;
     s.noRespawn = true;

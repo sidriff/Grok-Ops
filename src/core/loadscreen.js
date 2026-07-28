@@ -387,6 +387,45 @@ export class LoadScreen {
     this.deployBtn?.focus?.({ preventScroll: true });
   }
 
+  /**
+   * Soft return from an in-progress (or finished) match to the title shell.
+   * Assets stay warm — only Deploy is required, not Load / prewarm.
+   * @param {{ meta?: string }} [opts]
+   */
+  returnToTitle({ meta } = {}) {
+    if (this._dismissed || !this.root) return;
+    // Drop any stale Deploy waiters from a previous retreat.
+    this._deployResolvers.length = 0;
+    this._inGame = false;
+    this._ready = true;
+    this._progress = 1;
+    this._phase = 'ready';
+    this._qualityLocked = true;
+    this.root.classList.remove('boot-paused');
+    this._syncLookFromConfig();
+    this._syncLookUi();
+    this._syncQualityUi();
+    this._setLiveQuality();
+    this._setWarn('');
+    if (this.blurbEl) this.blurbEl.hidden = false;
+    this._setPanelMode?.('weapons');
+    if (this.fillEl) this.fillEl.style.width = '100%';
+    if (this.pctEl) this.pctEl.textContent = '100%';
+    if (this.labelEl) this.labelEl.textContent = 'Ready';
+    if (this.hintEl) this.hintEl.textContent = 'Enter · Space · Click Deploy';
+    if (this.kickerEl) this.kickerEl.textContent = 'Operator Briefing';
+    if (this.qLabel) this.qLabel.textContent = 'Graphics (locked)';
+    if (meta != null) this.setMeta(meta);
+    else if (this._selectedQuality) {
+      this.setMeta(`${this._selectedQuality.toUpperCase()} · ready`);
+    }
+    this._showShell({ ready: true });
+    this._setActionButton('deploy');
+    this.deployBtn?.focus?.({ preventScroll: true });
+    this._menuAudio.play('open');
+    this._menuAudio.startMusic();
+  }
+
   waitForDeploy() {
     if (this._dismissed || !this.root) return Promise.resolve();
     if (this._inGame && this._phase === 'playing') return Promise.resolve();
@@ -888,6 +927,7 @@ export class LoadScreen {
       this._retreatHandler();
       return;
     }
+    // Fallback if no handler (should not happen in normal boots).
     location.reload();
   }
 

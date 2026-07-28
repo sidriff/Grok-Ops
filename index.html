@@ -1362,8 +1362,17 @@
       </div>
     </div>
 
-    <!-- Leaderboard boots with the title shell (menu music), not after Load. -->
-    <script type="module" src="/src/social/boot.js"></script>
-    <script type="module" src="/src/main.js"></script>
+    <!--
+      Entry: if this window is the X OAuth popup callback (?code=…), hand the
+      code to the opener and exit — never load the game. Otherwise boot the
+      leaderboard (title shell) and the deferred game entry.
+    -->
+    <script type="module">
+      import { handleOAuthPopupCallback } from '/src/social/oauth-popup.js';
+      if (!handleOAuthPopupCallback()) {
+        import('/src/social/boot.js');
+        import('/src/main.js');
+      }
+    </script>
   </body>
 </html>

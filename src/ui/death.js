@@ -106,7 +106,16 @@ export class DeathOverlay {
         this.statKills,
         `KILLS  ${s.kills ?? 0}` + (s.allyKills ? `  ·  ALLY ${s.allyKills}` : '')
       );
-      setText(this.statAllies, `ALLIES UP  ${s.alliesAlive ?? 0}/3`);
+      const score =
+        s.score != null
+          ? Math.floor(s.score)
+          : null;
+      setText(
+        this.statAllies,
+        score != null
+          ? `SCORE  ${score.toLocaleString('en-US')}  ·  ALLIES  ${s.alliesAlive ?? 0}/3`
+          : `ALLIES UP  ${s.alliesAlive ?? 0}/3`
+      );
       return;
     }
 

@@ -1,13 +1,12 @@
 /**
- * Set Convex Auth JWT keys without shell flag-parsing the PEM dashes.
+ * Set Convex Auth JWT keys (matching pair) without shell flag-parsing PEM.
  *
- * Usage (from repo root, after `bunx convex dev` has a deployment):
  *   bun tools/set-auth-env.mjs
  *
- * Regenerates JWT_PRIVATE_KEY + JWKS and pushes them to the current
- * deployment. You still set AUTH_TWITTER_ID / AUTH_TWITTER_SECRET yourself
- * (X Developer Portal) — paste them in the Convex dashboard if the CLI hangs:
- *   https://dashboard.convex.dev → Project → Settings → Environment Variables
+ * Also prints the X Developer Portal checklist. You must set AUTH_TWITTER_ID
+ * and AUTH_TWITTER_SECRET yourself (secrets) — dashboard or:
+ *   bunx convex env set AUTH_TWITTER_ID '…'
+ *   bunx convex env set AUTH_TWITTER_SECRET '…'
  */
 
 import { generateKeyPair, exportPKCS8, exportJWK } from 'jose';
@@ -19,16 +18,18 @@ const JWT_PRIVATE_KEY = (await exportPKCS8(k.privateKey)).trimEnd().replace(/\n/
 const pub = await exportJWK(k.publicKey);
 const JWKS = JSON.stringify({ keys: [{ use: 'sig', ...pub }] });
 
-function setEnv(name, value) {
-  // Pass value as its own argv so -----BEGIN is never a CLI flag.
+writeFileSync('.jwt-key.txt', JWT_PRIVATE_KEY);
+writeFileSync('.jwks.txt', JWKS);
+
+function setFromFile(name, file) {
   const r = spawnSync(
     'bunx',
-    ['convex', 'env', 'set', name, value],
-    { encoding: 'utf8', shell: true, maxBuffer: 10 * 1024 * 1024 },
+    ['convex', 'env', 'set', name, '--from-file', file],
+    { encoding: 'utf8', shell: true },
   );
   const out = `${r.stdout || ''}${r.stderr || ''}`.trim();
   if (r.status !== 0) {
-    console.error(`FAILED ${name}:`, out || `exit ${r.status}`);
+    console.error(`FAILED ${name}:`, out);
     process.exitCode = 1;
     return false;
   }
@@ -36,25 +37,28 @@ function setEnv(name, value) {
   return true;
 }
 
-const okJ = setEnv('JWKS', JWKS);
-const okK = setEnv('JWT_PRIVATE_KEY', JWT_PRIVATE_KEY);
-
-// Local backup for debugging — delete after you're happy.
-writeFileSync('.auth-keys.json', JSON.stringify({ JWT_PRIVATE_KEY, JWKS }, null, 0));
-console.log('Wrote .auth-keys.json (delete after keys are on the deployment).');
-
-if (okJ && okK) {
-  console.log('\nAlso set on the deployment (dashboard is fine if CLI hangs):');
-  console.log('  SITE_URL=http://127.0.0.1:5173');
-  console.log('  AUTH_TWITTER_ID=<from X Developer Portal>');
-  console.log('  AUTH_TWITTER_SECRET=<from X Developer Portal>');
-  console.log('Callback URL:');
-  console.log('  https://abundant-chicken-369.convex.site/api/auth/callback/twitter');
-}
+const okJ = setFromFile('JWKS', '.jwks.txt');
+const okK = setFromFile('JWT_PRIVATE_KEY', '.jwt-key.txt');
 
 try {
-  // Don't leave PEM on disk if both set succeeded — user can re-run.
-  if (okJ && okK) unlinkSync('.auth-keys.json');
+  unlinkSync('.jwt-key.txt');
+  unlinkSync('.jwks.txt');
 } catch {
-  /* keep file on partial failure */
+  /* ignore */
 }
+
+console.log(`
+SITE_URL should be your game origin, e.g.:
+  bunx convex env set SITE_URL http://127.0.0.1:5173
+
+X Developer Portal app:
+  Callback URL:
+    https://abundant-chicken-369.convex.site/api/auth/callback/twitter
+  Then set:
+    bunx convex env set AUTH_TWITTER_ID '<client id>'
+    bunx convex env set AUTH_TWITTER_SECRET '<client secret>'
+
+Website URL / app origin: http://127.0.0.1:5173
+`);
+
+if (okJ && okK) console.log('JWT pair installed.');

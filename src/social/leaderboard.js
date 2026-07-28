@@ -225,13 +225,24 @@ export function bindLeaderboard(social, root = document) {
   loginBtn?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    void social.signInWithX().catch((err) => {
-      if (statusEl) {
-        statusEl.textContent =
-          'X login unavailable — set AUTH_TWITTER_ID / SECRET on Convex.';
-      }
-      console.error(err);
-    });
+    if (statusEl) statusEl.textContent = 'Opening X login…';
+    void social
+      .signInWithX()
+      .then(() => {
+        if (statusEl && !social.isAuthenticated) {
+          // Popup closed without completing — clear busy text.
+          statusEl.textContent = '';
+        }
+      })
+      .catch((err) => {
+        const msg = String(err?.message ?? err);
+        if (statusEl) {
+          statusEl.textContent = /AUTH_TWITTER|not configured/i.test(msg)
+            ? 'X login not set up — need AUTH_TWITTER_ID + SECRET on Convex.'
+            : msg.slice(0, 120);
+        }
+        console.error(err);
+      });
   });
 
   logoutBtn?.addEventListener('click', (e) => {
@@ -243,6 +254,12 @@ export function bindLeaderboard(social, root = document) {
   unsub = social.subscribe((state) => {
     renderBoard(state);
     renderAuth(state);
+    if (state.error && statusEl && state.isAuthenticated === false) {
+      // Don't clobber board load errors that already rendered.
+      if (!state.board?.length || /oauth|sign|twitter|X login|AUTH_/i.test(state.error)) {
+        statusEl.textContent = state.error.slice(0, 140);
+      }
+    }
   });
 
   return {
