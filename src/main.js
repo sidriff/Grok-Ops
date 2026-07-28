@@ -1,24 +1,20 @@
-import { Engine } from './core/engine.js';
+/**
+ * Boot entry.
+ *
+ * The title shell (graphics pick, look prefs, Load) must paint and stay
+ * interactive without waiting on the full game graph. Only light modules are
+ * static imports; the engine + systems load after the player clicks Load.
+ */
+
 import { createConfig, QUALITY_PRESETS } from './core/config.js';
 import { detectGraphics } from './core/gpu.js';
 import { createLoadScreen } from './core/loadscreen.js';
 
-import { RenderSystem } from './render/index.js';
-import { MaterialSystem } from './materials/index.js';
-import { SkySystem } from './sky/index.js';
-import { WorldSystem } from './world/index.js';
-import { PhysicsSystem } from './physics/index.js';
-import { PlayerSystem } from './player/index.js';
-import { WeaponSystem } from './weapons/index.js';
-import { FxSystem } from './fx/index.js';
-import { AiSystem } from './ai/index.js';
-import { UiSystem } from './ui/index.js';
-import { AudioSystem } from './audio/index.js';
-
-import { installShotApi } from './dev/shots.js';
-import { prewarm } from './core/prewarm.js';
-
 const params = new URLSearchParams(location.search);
+
+// Leaderboard + X login boot from src/social/boot.js (separate script in
+// index.html) so the board fills while menu music plays — not after Load.
+const social = () => window.__SOCIAL__ ?? null;
 const capture = params.get('capture') === '1';
 // Deterministic shutter for the pixel gate: the engine does not schedule its own
 // frames, the driver advances exactly N of them through window.__PUMP__. Opt-in,
@@ -57,6 +53,8 @@ if (skipMenu) {
 } else {
   // Phase 1 — briefing: project pitch + graphics pick, then Load.
   // Quality must be chosen before Engine init (bakes, shadows, prewarm budget).
+  // Graphics cards are already in the HTML / LoadScreen constructor — this only
+  // waits on the human click, not on the game bundle.
   const choice = await load.waitForBriefing({
     recommended: gpu.quality,
     forced: forcedQ && QUALITY_PRESETS[forcedQ] ? forcedQ : null,
@@ -68,7 +66,7 @@ if (skipMenu) {
     fov: choice.fov,
     invertY: choice.invertY,
   };
-  // Same shell — lock graphics + flip CTA to Loading, then start engine work.
+  // Same shell — lock graphics + flip CTA to Loading, then fetch the game graph.
   load.beginLoading({
     meta: `${quality.toUpperCase()} · ${gpu.renderer || 'GPU'}`,
   });
@@ -89,10 +87,55 @@ console.info(
     ` — ${gpu.renderer || 'unknown GPU'} | score ${gpu.score} | ${gpu.reason}`
 );
 
+// Phase 2 — pull the game. Dynamic so the briefing is not blocked by three.js /
+// world / weapons / AI module evaluation on cold boot.
+if (!skipMenu) {
+  load.setProgress(0.05, { stage: 'systems', label: 'Loading systems…' });
+}
+
+const [
+  { Engine },
+  { RenderSystem },
+  { MaterialSystem },
+  { SkySystem },
+  { WorldSystem },
+  { PhysicsSystem },
+  { PlayerSystem },
+  { WeaponSystem },
+  { FxSystem },
+  { AiSystem },
+  { UiSystem },
+  { AudioSystem },
+  { GameSystem },
+  { installShotApi },
+  { prewarm },
+] = await Promise.all([
+  import('./core/engine.js'),
+  import('./render/index.js'),
+  import('./materials/index.js'),
+  import('./sky/index.js'),
+  import('./world/index.js'),
+  import('./physics/index.js'),
+  import('./player/index.js'),
+  import('./weapons/index.js'),
+  import('./fx/index.js'),
+  import('./ai/index.js'),
+  import('./ui/index.js'),
+  import('./audio/index.js'),
+  import('./game/index.js'),
+  import('./dev/shots.js'),
+  import('./core/prewarm.js'),
+]);
+
+if (!skipMenu) {
+  load.setProgress(0.08, { stage: 'systems', label: 'Systems ready…' });
+}
+
 const canvas = document.getElementById('game');
 const engine = new Engine({ canvas, config });
 // Always wire look prefs — shell is also the pause menu (incl. skipMenu path).
 load.bindConfig(config, engine.camera);
+load.bindInput(engine.input);
 
 // Registration order is irrelevant — Registry topo-sorts on static deps.
 engine
@@ -106,10 +149,11 @@ engine
   .add(FxSystem)
   .add(AiSystem)
   .add(UiSystem)
-  .add(AudioSystem);
+  .add(AudioSystem)
+  .add(GameSystem);
 
-// Init covers ~6–72% of the bar; prewarm takes the rest. Labels come from stage ids.
-const INIT_LO = 0.06;
+// Init covers ~8–72% of the bar; prewarm takes the rest. Labels come from stage ids.
+const INIT_LO = 0.08;
 const INIT_HI = 0.72;
 const WARM_LO = 0.72;
 const WARM_HI = 0.98;
@@ -277,13 +321,39 @@ if (!skipMenu) {
   engine.input.enabled = true;
   player?.setControlEnabled?.(true);
   ui?.setHudVisible?.(true);
+  // Fade the shell out with a normal cursor (fullscreen may already be on from
+  // the Deploy click). Only then pointer-lock — locking earlier hides the cursor
+  // over the still-visible load menu.
+  await load.enterPlaying({ immediate: false });
   engine.input.capturePointerForGame({ lock: true });
 }
+
+// Auto-post personal best when a survival match ends (logged-in only).
+engine.ctx.events.on('game:end', (payload) => {
+  if (!payload || payload.endgame !== true) return;
+  const s = social();
+  if (!s?.submitScore) return;
+  void s
+    .submitScore({
+      kills: payload.kills ?? 0,
+      combatPoints: payload.combatPoints ?? 0,
+      timeSurvived: payload.timeSurvived ?? 0,
+      alliesAlive: payload.alliesAlive ?? 0,
+      won: !!payload.won,
+    })
+    .then((res) => {
+      if (res?.ok && res.improved) {
+        console.info('[social] new personal best posted', res.score);
+      }
+    });
+});
 
 window.__READY__ = true;
 window.__ENGINE__ = engine;
 window.__LOAD__ = load;
 
 if (import.meta.hot) {
-  import.meta.hot.dispose(() => engine.dispose());
+  import.meta.hot.dispose(() => {
+    engine.dispose();
+  });
 }

@@ -61,8 +61,18 @@ export class Killfeed {
     setText(n._v, (e.victim ?? 'UNKNOWN').toUpperCase());
     setStyle(n._hs, 'display', e.headshot ? '' : 'none');
     setClass(n, 'mine', !!e.mine);
-    setStyle(n._a, 'color', e.attackerFriendly === false ? 'var(--enemy)' : '');
-    setStyle(n._v, 'color', e.attackerFriendly === false ? 'var(--friend)' : '');
+    // Defaults: blue attacker / red victim. Hostile kills flip both.
+    // Ally kills keep the default (blue ally name, red hostile victim).
+    if (e.attackerFriendly === false) {
+      setStyle(n._a, 'color', 'var(--enemy)');
+      setStyle(n._v, 'color', 'var(--friend)');
+    } else if (e.attackerFriendly === true) {
+      setStyle(n._a, 'color', 'var(--friend)');
+      setStyle(n._v, 'color', 'var(--enemy)');
+    } else {
+      setStyle(n._a, 'color', '');
+      setStyle(n._v, 'color', '');
+    }
     return it;
   }
 

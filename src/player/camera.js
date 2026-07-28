@@ -116,7 +116,12 @@ export class CameraRig {
   /* impulses — the public feel API                                       */
   /* ==================================================================== */
 
-  /** Camera-owned recoil. Angles in radians; `punch` in metres. */
+  /**
+   * Camera spring flinch — temporary overshoot that returns to rest.
+   * True aim climb (the learnable pattern) is applied to movement look via
+   * `player.addAimClimb`; do not put permanent climb through this path.
+   * Angles in radians; `punch` in metres.
+   */
   addRecoil(pitch = 0, yaw = 0, roll = 0, punch = 0) {
     this.recoilPitch.kick(pitch);
     this.recoilYaw.kick(yaw);
@@ -302,7 +307,10 @@ export class CameraRig {
     else if (m.sprinting) moveTarget = F.sprint;
     else if (!m.grounded && m.velocity.y < -6) moveTarget = F.air;
     this.fovMove = approach(this.fovMove, moveTarget, F.moveTau, dt);
-    this.fovAds = approach(this.fovAds, lerp(1, cfg.adsFovScale, ads), F.adsTau, dt);
+    // Per-weapon zoom when `player.adsFovScale` is set (from def.adsFov); else
+    // the global config fallback.
+    const adsScale = this.ctx.peek?.('player')?.adsFovScale ?? cfg.adsFovScale;
+    this.fovAds = approach(this.fovAds, lerp(1, adsScale, ads), F.adsTau, dt);
     this.baseFov = cfg.fov;
     this.fov = this.baseFov * this.fovMove * this.fovAds;
 

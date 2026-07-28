@@ -45,7 +45,10 @@
  *                             the camera FOV, sway and move speed follow it
  *
  * CAMERA FEEL (for `weapons`, `fx`, `ai`)
- *   p.addRecoil(pitch, yaw, roll, punch)   camera-owned recoil impulse (radians)
+ *   p.addAimClimb(pitch, yaw)              permanent look offset (radians) — the
+ *                                          learnable recoil pattern lives here
+ *   p.addRecoil(pitch, yaw, roll, punch)   camera spring flinch that returns
+ *                                          (punch/overshoot only; not climb)
  *   p.addKick(pitch, yaw, roll)            independent weapon kick channel
  *   p.addTrauma(a)                         0..1 noise shake (explosions, hits)
  *   p.viewKick                             { pitch, yaw, roll, punch } this frame
@@ -101,6 +104,13 @@ export class PlayerSystem {
   constructor() {
     /** Lets `ai` / `physics` recognise the local player from an owner pointer. */
     this.isPlayer = true;
+    /** Same side as blue allies (survival). Hostiles are team 1+. */
+    this.team = 0;
+    /**
+     * When false, death cam keeps running after the countdown instead of
+     * calling respawn() — survival uses a score screen + Retry.
+     */
+    this.autoRespawn = true;
     this.movement = null;
     this.rig = null;
     this.health = null;
@@ -109,6 +119,8 @@ export class PlayerSystem {
 
     this.controlEnabled = true;
     this.adsAmount = 0;
+    /** Full-ADS FOV multiplier; `weapons` sets this from the active def.adsFov. */
+    this.adsFovScale = null;
     this._adsExternal = false;
     this._adsExternalAge = 0;
     this.adsRequested = false;
@@ -596,7 +608,8 @@ export class PlayerSystem {
       this.health.update(dt);
       this.lowHealthPass?.sync(this.health);
       this._syncHitbox();
-      if (this.deathCam.update(dt)) this.respawn();
+      // Survival (autoRespawn=false) freezes on the death cam; Retry restarts.
+      if (this.deathCam.update(dt) && this.autoRespawn !== false) this.respawn();
       this._publishState();
       return;
     }
@@ -1012,6 +1025,26 @@ export class PlayerSystem {
     this._adsExternal = true;
     this._adsExternalAge = 0;
     this.movement.adsAmount = this.adsAmount;
+  }
+
+  /** Full-ADS world FOV scale (weapon def `adsFov`). null = config default. */
+  setAdsFovScale(v) {
+    this.adsFovScale = v == null ? null : clamp(v, 0.15, 1);
+  }
+
+  /**
+   * Permanent aim climb — mutates the look basis the player owns.
+   * Pattern pitch/yaw from weapons land here so a burst walks the reticle and
+   * the player has to counter-steer. Camera springs (addRecoil) are only the
+   * short overshoot on top of this new home.
+   */
+  addAimClimb(pitch = 0, yaw = 0) {
+    const m = this.movement;
+    if (!m) return;
+    m.pitch = clamp(m.pitch + pitch, -CAMERA.pitchLimit, CAMERA.pitchLimit);
+    m.yaw += yaw;
+    if (m.yaw > Math.PI) m.yaw -= Math.PI * 2;
+    else if (m.yaw < -Math.PI) m.yaw += Math.PI * 2;
   }
 
   addRecoil(pitch, yaw, roll, punch) {

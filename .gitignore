@@ -15,3 +15,6 @@ demo/
 .tmp-rend/
 revcrops/
 tmp/
+.env.local
+.auth-keys.json
+.jwt-key.txt

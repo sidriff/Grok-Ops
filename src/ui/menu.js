@@ -22,6 +22,8 @@ export class PauseMenu {
     this.open = false;
     this.shown = 0;
     this._prevScale = 1;
+    /** @type {null | (() => void)} */
+    this.onRetreat = null;
   }
 
   /**
@@ -32,7 +34,17 @@ export class PauseMenu {
     this.boot = boot || null;
     if (this.boot) {
       this.boot.setResumeHandler(() => this.close());
+      this.boot.setRetreatHandler(() => this.retreat());
     }
+  }
+
+  /** Back to title menu (wired from UiSystem; defaults to reload). */
+  retreat() {
+    if (typeof this.onRetreat === 'function') {
+      this.onRetreat();
+      return;
+    }
+    location.reload();
   }
 
   /** No-op — look prefs live on the boot shell; kept for API compatibility. */
@@ -74,6 +86,10 @@ export class PauseMenu {
     const resume = el('button', 'ow-btn primary', btns, 'Resume');
     resume.type = 'button';
     resume.addEventListener('click', () => this.close());
+    const retreat = el('button', 'ow-btn', btns, 'Retreat');
+    retreat.type = 'button';
+    retreat.title = 'Back to menu';
+    retreat.addEventListener('click', () => this.retreat());
     el('div', 'hint', inner, 'ESC RESUME');
   }
 
@@ -83,13 +99,16 @@ export class PauseMenu {
     const t = this.ctx.time;
     if (t) t.scale = this._prevScale ?? 1;
     this.ctx.peek('player')?.setControlEnabled?.(true);
-    this.ctx.input?.capturePointerForGame?.({ lock: true });
     this.ctx.events.emit('ui:pause', { paused: false });
 
+    // Hide the shell first, then pointer-lock. Locking while the pause UI is
+    // still fading kills the cursor over the menu (same as Deploy).
+    const lockAim = () => this.ctx.input?.capturePointerForGame?.({ lock: true });
     if (this.boot) {
-      this.boot.hidePause({ immediate: false });
+      void Promise.resolve(this.boot.hidePause({ immediate: false })).then(lockAim);
       return;
     }
+    lockAim();
   }
 
   /** Driven with unscaled time so the fade still runs while the game is frozen. */
@@ -112,7 +131,10 @@ export class PauseMenu {
 
   dispose() {
     if (this.open) this.ctx.input?.capturePointerForGame?.({ lock: false });
-    if (this.boot) this.boot.setResumeHandler(null);
+    if (this.boot) {
+      this.boot.setResumeHandler(null);
+      this.boot.setRetreatHandler(null);
+    }
     this.root.remove();
   }
 }

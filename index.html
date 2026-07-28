@@ -25,8 +25,9 @@
       #boot {
         position: fixed; inset: 0; z-index: 100;
         pointer-events: auto; cursor: default;
-        display: flex; align-items: center; justify-content: flex-start;
-        overflow: hidden;
+        display: flex; align-items: flex-start; justify-content: flex-start;
+        overflow-x: hidden;
+        overflow-y: auto;
         background: #05070a;
         transition: opacity 0.55s ease, background 0.7s ease, backdrop-filter 0.7s ease;
         will-change: opacity;
@@ -133,15 +134,19 @@
         pointer-events: none;
       }
 
-      /* Content panel — always wide; options visible from first paint. */
+      /* Content panel — always wide; options + leaderboard visible from first paint. */
       .boot-panel {
         position: relative; z-index: 2;
-        margin-left: clamp(2rem, 6vw, 5.5rem);
-        max-width: min(54rem, 92vw);
+        margin-left: clamp(1.5rem, 4vw, 4rem);
+        margin-right: clamp(1rem, 3vw, 2rem);
+        margin-top: clamp(1.25rem, 3vh, 2.5rem);
+        margin-bottom: clamp(1.5rem, 4vh, 3rem);
+        max-width: min(72rem, 96vw);
+        width: 100%;
+        box-sizing: border-box;
         padding-left: 1.1rem;
         border-left: 2px solid #ffb02a;
       }
-
       .boot-kicker {
         font-size: 0.68rem;
         letter-spacing: 0.34em;
@@ -228,27 +233,107 @@
       .boot-actions {
         margin-top: 1.75rem;
         display: flex;
-        flex-wrap: wrap;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.65rem;
+        width: 100%;
+      }
+
+      .boot-cta-row {
+        display: flex;
+        align-items: stretch;
+        gap: 0.65rem;
+        width: 100%;
+      }
+
+      /* Opt-in fullscreen so Ctrl-crouch can keyboard-lock (Chrome reserves Ctrl+W). */
+      .boot-fullscreen {
+        appearance: none;
+        flex: 0 0 auto;
+        display: inline-flex;
         align-items: center;
-        gap: 0.75rem;
+        gap: 0.45rem;
+        margin: 0;
+        border: 1px solid rgba(196, 210, 219, 0.18);
+        background: rgba(0, 0, 0, 0.22);
+        color: rgba(214, 227, 234, 0.72);
+        font: inherit;
+        font-size: 0.62rem;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        padding: 0 0.85rem;
+        cursor: pointer;
+        user-select: none;
+        transition: border-color 0.15s, color 0.15s, background 0.15s;
+        white-space: nowrap;
+      }
+      .boot-fullscreen:hover {
+        border-color: rgba(255, 176, 42, 0.35);
+        color: rgba(255, 230, 190, 0.9);
+      }
+      .boot-fullscreen:has(input:focus-visible) {
+        outline: 2px solid rgba(255, 208, 120, 0.7);
+        outline-offset: 2px;
+      }
+      .boot-fullscreen input {
+        appearance: none;
+        width: 0.85rem;
+        height: 0.85rem;
+        margin: 0;
+        border: 1px solid rgba(196, 210, 219, 0.4);
+        background: rgba(0, 0, 0, 0.35);
+        cursor: pointer;
+        flex: 0 0 auto;
+        position: relative;
+      }
+      .boot-fullscreen input:checked {
+        border-color: #ffb02a;
+        background: #ffb02a;
+      }
+      .boot-fullscreen input:checked::after {
+        content: '';
+        position: absolute;
+        left: 0.22rem;
+        top: 0.05rem;
+        width: 0.22rem;
+        height: 0.42rem;
+        border: solid #100b02;
+        border-width: 0 1.5px 1.5px 0;
+        transform: rotate(45deg);
+      }
+      .boot-fullscreen-sub {
+        display: none;
+      }
+      @media (min-width: 520px) {
+        .boot-fullscreen-sub {
+          display: inline;
+          font-weight: 500;
+          letter-spacing: 0.08em;
+          color: rgba(196, 210, 219, 0.38);
+          text-transform: none;
+        }
       }
 
       #boot-deploy {
         appearance: none;
-        display: inline-flex;
+        display: flex;
         align-items: center;
         justify-content: center;
-        gap: 0.65rem;
+        gap: 0.55rem;
+        flex: 1 1 auto;
+        min-width: 0;
+        width: auto;
         border: 1px solid rgba(255, 176, 42, 0.35);
         background: rgba(255, 176, 42, 0.12);
         color: rgba(255, 220, 160, 0.45);
         font: inherit;
         font-weight: 700;
-        font-size: 0.78rem;
+        font-size: clamp(0.78rem, 1.2vw, 0.95rem);
         letter-spacing: 0.28em;
-        padding: 0.85rem 1.9rem;
+        padding: 0.7rem 1rem;
+        min-height: 2.65rem;
         cursor: not-allowed;
-        min-width: 11.5rem;
         transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
       }
       /* Active Loading… state — live amber, not a dead grey Deploy */
@@ -290,10 +375,39 @@
         outline-offset: 3px;
       }
 
+      /* Pause-only: back to title shell (reload) */
+      #boot-retreat {
+        appearance: none;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(196, 210, 219, 0.22);
+        background: transparent;
+        color: rgba(214, 227, 234, 0.72);
+        font: inherit;
+        font-weight: 700;
+        font-size: 0.72rem;
+        letter-spacing: 0.24em;
+        padding: 0.85rem 1.35rem;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s, color 0.15s;
+      }
+      #boot.boot-paused #boot-retreat { display: inline-flex; }
+      #boot-retreat:hover {
+        background: rgba(255, 80, 60, 0.1);
+        border-color: rgba(255, 80, 60, 0.45);
+        color: rgba(255, 230, 220, 0.95);
+      }
+      #boot-retreat:focus-visible {
+        outline: 2px solid rgba(255, 120, 90, 0.7);
+        outline-offset: 3px;
+      }
+
       .boot-hint {
         font-size: 0.6rem;
         letter-spacing: 0.22em;
         color: rgba(196, 210, 219, 0.28);
+        text-align: center;
       }
       #boot.boot-ready .boot-hint { color: rgba(196, 210, 219, 0.42); }
 
@@ -334,7 +448,7 @@
         grid-template-columns: 1fr 1fr;
         grid-auto-rows: 1fr; /* equal row heights; cards fill the cell */
         gap: 0.55rem;
-        margin-bottom: 0.75rem;
+        margin-bottom: 0;
         align-items: stretch;
       }
       @media (max-width: 520px) {
@@ -346,7 +460,7 @@
         flex-direction: column;
         align-items: stretch;
         height: 100%;
-        min-height: 0;
+        min-height: 12.75rem;
         text-align: left;
         font: inherit;
         text-transform: uppercase;
@@ -354,7 +468,7 @@
         border: 1px solid rgba(255, 255, 255, 0.1);
         background: rgba(8, 12, 18, 0.55);
         color: inherit;
-        padding: 0.75rem 0.85rem;
+        padding: 0.55rem 0.7rem 0.6rem 0.75rem;
         transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
         box-sizing: border-box;
       }
@@ -390,39 +504,54 @@
         font-weight: 600;
         white-space: nowrap;
       }
-      /* Fixed 3-line slot — every card same height regardless of blurb length. */
+      /* Fill the card like weapon blurbs — keeps tier boxes same height as arsenal. */
       .boot-q-desc {
-        flex: 0 0 auto;
-        font-size: 0.62rem;
-        letter-spacing: 0.04em;
-        line-height: 1.45;
-        height: calc(1.45em * 3);
+        flex: 1 1 auto;
+        font-size: 0.58rem;
+        letter-spacing: 0.03em;
+        line-height: 1.4;
+        min-height: calc(1.4em * 4);
         text-transform: none;
         color: rgba(196, 210, 219, 0.55);
         overflow: hidden;
         display: -webkit-box;
         -webkit-box-orient: vertical;
-        -webkit-line-clamp: 3;
-        line-clamp: 3;
+        -webkit-line-clamp: 6;
+        line-clamp: 6;
       }
-      /* Always reserve the warn row so "Reload to change" does not resize the block. */
+      /* Foot sits under the cards; stack height still tracks weapons via .boot-swap. */
+      .boot-q-foot {
+        margin-top: 0.35rem;
+      }
       .boot-q-warn {
         min-height: 1.1em;
-        margin: 0.35rem 0 0.5rem;
+        margin: 0 0 0.15rem;
         font-size: 0.62rem;
         letter-spacing: 0.16em;
         color: #ffb02a;
       }
 
-      /* ---- Loading grid: progress + controls / prefs ---- */
+      /* ---- Loading grid: main · controls · leaderboard ---- */
       .boot-load-grid {
         display: grid;
-        grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-        gap: 1.75rem 2.25rem;
-        align-items: start;
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) minmax(0, 0.85fr);
+        gap: 1.5rem 1.75rem;
+        /* Stretch so leaderboard matches the first column's full height. */
+        align-items: stretch;
+      }
+      @media (max-width: 1100px) {
+        .boot-load-grid {
+          grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+        }
+        .boot-load-board {
+          grid-column: 1 / -1;
+          /* Full-width board under main — don't force a tall empty stretch. */
+          min-height: 18rem;
+        }
       }
       @media (max-width: 820px) {
         .boot-load-grid { grid-template-columns: 1fr; }
+        .boot-load-board { grid-column: auto; min-height: 14rem; }
       }
       .boot-side-block {
         margin-bottom: 1.15rem;
@@ -511,6 +640,409 @@
         letter-spacing: 0.18em;
       }
 
+      /* ---- Graphics ↔ Weapons: stacked so Load does not reflow the shell ---- */
+      .boot-swap {
+        display: grid;
+        grid-template-areas: "panel";
+        margin-top: 1.25rem;
+      }
+      .boot-swap > .boot-side-block {
+        grid-area: panel;
+        margin-top: 0;
+        margin-bottom: 0;
+      }
+      /* Keep both panels laid out; hide the inactive one without collapsing height. */
+      .boot-swap > .boot-side-block.is-off {
+        visibility: hidden;
+        pointer-events: none;
+      }
+      .boot-arsenal-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-auto-rows: 1fr;
+        gap: 0.55rem;
+        align-items: stretch;
+      }
+      @media (max-width: 520px) {
+        .boot-arsenal-grid { grid-template-columns: 1fr; }
+      }
+      .boot-wep {
+        position: relative;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-rows: auto auto auto auto;
+        column-gap: 0.7rem;
+        row-gap: 0.22rem;
+        align-content: start;
+        height: 100%;
+        min-height: 12.75rem;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background:
+          linear-gradient(105deg, rgba(255, 176, 42, 0.06) 0%, transparent 55%),
+          rgba(6, 9, 14, 0.55);
+        padding: 0.55rem 0.7rem 0.6rem 0.75rem;
+        overflow: hidden;
+        transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+        box-sizing: border-box;
+      }
+      .boot-wep::before {
+        content: "";
+        position: absolute;
+        left: 0; top: 0; bottom: 0;
+        width: 2px;
+        background: linear-gradient(180deg, #ffb02a, rgba(255, 176, 42, 0.12));
+        opacity: 0.5;
+      }
+      .boot-wep:hover {
+        border-color: rgba(255, 176, 42, 0.38);
+        background:
+          linear-gradient(105deg, rgba(255, 176, 42, 0.1) 0%, transparent 55%),
+          rgba(10, 14, 20, 0.72);
+        box-shadow: 0 0 18px rgba(255, 176, 42, 0.08);
+      }
+      .boot-wep-top {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.45rem;
+      }
+      .boot-wep-slot {
+        flex: 0 0 auto;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+        font-size: 0.55rem;
+        letter-spacing: 0.08em;
+        color: #ffb02a;
+        background: rgba(255, 176, 42, 0.1);
+        border: 1px solid rgba(255, 176, 42, 0.28);
+        padding: 0.1rem 0.34rem;
+        line-height: 1.3;
+      }
+      .boot-wep-class {
+        font-size: 0.5rem;
+        letter-spacing: 0.18em;
+        color: rgba(196, 210, 219, 0.4);
+        text-align: right;
+        line-height: 1.3;
+      }
+      .boot-wep-name {
+        grid-column: 1;
+        font-family: "DIN Condensed", "Avenir Next Condensed", "Oswald", "Arial Narrow",
+          "Helvetica Neue", Impact, system-ui, sans-serif;
+        font-size: 1.05rem;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        line-height: 1;
+        color: rgba(255, 236, 210, 0.96);
+        margin: 0;
+        align-self: end;
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+      }
+      .boot-wep-role {
+        grid-column: 2;
+        font-size: 0.52rem;
+        letter-spacing: 0.16em;
+        color: rgba(255, 176, 42, 0.78);
+        font-weight: 600;
+        align-self: end;
+        margin: 0;
+      }
+      .boot-wep-sil {
+        grid-column: 1 / -1;
+        display: block;
+        width: 100%;
+        height: 1.7rem;
+        margin: 0.05rem 0 0.1rem;
+        color: rgba(214, 227, 234, 0.48);
+        opacity: 0.9;
+        filter: drop-shadow(0 0 6px rgba(255, 176, 42, 0.1));
+      }
+      .boot-wep:hover .boot-wep-sil {
+        color: rgba(255, 220, 160, 0.72);
+      }
+      .boot-wep-blurb {
+        grid-column: 1 / -1;
+        font-size: 0.58rem;
+        letter-spacing: 0.03em;
+        line-height: 1.4;
+        text-transform: none;
+        color: rgba(196, 210, 219, 0.55);
+        margin: 0;
+      }
+      .boot-wep-specs {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.22rem;
+        margin-top: 0.15rem;
+      }
+      .boot-wep-chip {
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+        font-size: 0.5rem;
+        letter-spacing: 0.05em;
+        color: rgba(255, 220, 160, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(0, 0, 0, 0.25);
+        padding: 0.1rem 0.28rem;
+        white-space: nowrap;
+      }
+      .boot-wep-stats {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.2rem 0.55rem;
+        margin-top: 0.2rem;
+      }
+      .boot-wep-stat {
+        display: grid;
+        grid-template-columns: 2.6rem 1fr;
+        align-items: center;
+        gap: 0.3rem;
+      }
+      .boot-wep-stat span {
+        font-size: 0.48rem;
+        letter-spacing: 0.14em;
+        color: rgba(196, 210, 219, 0.38);
+      }
+      .boot-wep-bar {
+        position: relative;
+        height: 2px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+      .boot-wep-bar i {
+        display: block;
+        height: 100%;
+        width: var(--v, 50%);
+        background: linear-gradient(90deg, #ff9a12, #ffb02a 60%, #ffd078);
+        box-shadow: 0 0 6px rgba(255, 176, 42, 0.3);
+      }
+      .boot-wep-foot {
+        grid-column: 1 / -1;
+        margin-top: 0.15rem;
+        font-size: 0.5rem;
+        letter-spacing: 0.12em;
+        color: rgba(196, 210, 219, 0.34);
+      }
+
+      /* ---- Leaderboard column (height matches first column via grid stretch) ---- */
+      .boot-load-board {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .boot-load-board > .boot-side-block {
+        flex: 1 1 auto;
+        min-height: 0;
+        margin-bottom: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      /* Shared grid so head + rows line up exactly. */
+      .boot-lb-head,
+      .boot-lb-row {
+        display: grid;
+        grid-template-columns: 1.35rem minmax(0, 1fr) 2.35rem 3.1rem 2.9rem;
+        column-gap: 0.4rem;
+        align-items: center;
+        padding: 0.28rem 0.2rem;
+        box-sizing: border-box;
+        flex: 0 0 auto;
+      }
+      .boot-lb-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.22rem;
+        /* Fill remaining height of the first column; scroll if more rows. */
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 176, 42, 0.35) transparent;
+      }
+      .boot-lb-row {
+        font-size: 0.62rem;
+        letter-spacing: 0.04em;
+        color: rgba(230, 238, 244, 0.88);
+        border: 1px solid transparent;
+      }
+      .boot-lb-row.is-you {
+        border-color: rgba(255, 176, 42, 0.35);
+        background: rgba(255, 176, 42, 0.08);
+        color: rgba(255, 230, 190, 0.95);
+      }
+      .boot-lb-rank {
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+        color: rgba(255, 176, 42, 0.9);
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .boot-lb-name {
+        min-width: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 0.05rem;
+        text-transform: none;
+        letter-spacing: 0.03em;
+        color: #eef4f7;
+      }
+      .boot-lb-primary {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+        color: #f2f7fa;
+      }
+      .boot-lb-secondary {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.52rem;
+        letter-spacing: 0.04em;
+        color: rgba(196, 210, 219, 0.55);
+      }
+      .boot-lb-time {
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+        text-align: right;
+        color: rgba(255, 220, 160, 0.9);
+        font-variant-numeric: tabular-nums;
+      }
+      .boot-lb-allies {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 0.18rem;
+        min-height: 1rem;
+      }
+      .boot-lb-ico {
+        width: 0.72rem;
+        height: 0.95rem;
+        flex: 0 0 auto;
+        display: block;
+      }
+      .boot-lb-ico-ally {
+        fill: rgba(90, 180, 255, 0.95);
+        filter: drop-shadow(0 0 2px rgba(80, 170, 255, 0.35));
+      }
+      .boot-lb-ico-tomb {
+        fill: rgba(140, 150, 160, 0.55);
+      }
+      .boot-lb-score {
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+        text-align: right;
+        color: rgba(255, 230, 180, 0.95);
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      .boot-lb-formula {
+        flex: 0 0 auto;
+        margin: 0 0 0.55rem;
+        padding: 0.45rem 0.5rem;
+        border: 1px solid rgba(255, 176, 42, 0.18);
+        background: rgba(255, 176, 42, 0.06);
+        font-size: 0.55rem;
+        letter-spacing: 0.06em;
+        line-height: 1.45;
+        color: rgba(214, 227, 234, 0.72);
+        text-transform: none;
+      }
+      .boot-lb-formula strong {
+        color: rgba(255, 220, 160, 0.95);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+      .boot-lb-formula-sub {
+        display: block;
+        margin-top: 0.2rem;
+        font-size: 0.5rem;
+        letter-spacing: 0.1em;
+        color: rgba(196, 210, 219, 0.42);
+        text-transform: uppercase;
+      }
+      .boot-lb-status {
+        min-height: 1.1em;
+        margin: 0 0 0.45rem;
+        font-size: 0.58rem;
+        letter-spacing: 0.12em;
+        color: rgba(196, 210, 219, 0.42);
+        flex: 0 0 auto;
+      }
+      .boot-load-board .boot-section-label {
+        flex: 0 0 auto;
+      }
+      .boot-lb-auth {
+        margin-top: auto;
+        padding-top: 0.75rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        flex: 0 0 auto;
+      }
+      .boot-lb-cta {
+        margin: 0 0 0.55rem;
+        font-size: 0.58rem;
+        letter-spacing: 0.1em;
+        line-height: 1.45;
+        color: rgba(196, 210, 219, 0.55);
+        text-transform: none;
+      }
+      .boot-lb-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        align-items: center;
+      }
+      .boot-lb-btn {
+        appearance: none;
+        font: inherit;
+        font-size: 0.58rem;
+        letter-spacing: 0.14em;
+        font-weight: 700;
+        padding: 0.4rem 0.65rem;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(8, 12, 18, 0.55);
+        color: rgba(214, 227, 234, 0.7);
+        cursor: pointer;
+        text-transform: uppercase;
+      }
+      .boot-lb-btn.primary {
+        border-color: rgba(29, 155, 240, 0.55);
+        background: rgba(29, 155, 240, 0.16);
+        color: rgba(210, 235, 255, 0.95);
+      }
+      .boot-lb-btn.primary:hover {
+        border-color: rgba(29, 155, 240, 0.85);
+        background: rgba(29, 155, 240, 0.28);
+      }
+      .boot-lb-btn:hover {
+        border-color: rgba(255, 255, 255, 0.28);
+        color: rgba(255, 255, 255, 0.9);
+      }
+      .boot-lb-who {
+        font-size: 0.58rem;
+        letter-spacing: 0.08em;
+        color: rgba(255, 220, 160, 0.9);
+        text-transform: none;
+      }
+      .boot-lb-head {
+        font-size: 0.48rem;
+        letter-spacing: 0.14em;
+        color: rgba(196, 210, 219, 0.4);
+        text-transform: uppercase;
+        margin-bottom: 0.15rem;
+      }
+      .boot-lb-head span:nth-child(1) { text-align: right; }
+      .boot-lb-head span:nth-child(3),
+      .boot-lb-head span:nth-child(4),
+      .boot-lb-head span:nth-child(5) {
+        text-align: right;
+      }
+
       @media (prefers-reduced-motion: reduce) {
         .boot-sky, .boot-horizon, .boot-dust, .boot-sweep, .boot-bar-glow {
           animation: none !important;
@@ -542,13 +1074,16 @@
         <div class="boot-load-grid" id="boot-body">
           <div class="boot-load-main">
             <p class="boot-blurb" id="boot-blurb">
-              <strong>Grok Ops</strong> is a fork of
+              <strong>Grok Ops</strong> is a
+              <a href="https://github.com/sidriff/Claude-of-Duty" target="_blank" rel="noopener noreferrer">fork</a>
+              of
               <a href="https://github.com/mshumer/Claude-of-Duty" target="_blank" rel="noopener noreferrer">Claude of Duty</a>
-              by mshumer — a short browser firefight on that scaffold.
+              by <a href="https://x.com/mattshumer_" target="_blank" rel="noopener noreferrer">@mattshumer_</a>
+              — a short browser firefight on that scaffold.
               Built by <strong>Grok</strong> and a professional game designer
-              (<a href="https://x.com/sidriff" target="_blank" rel="noopener noreferrer">@sidriff</a>)
               to demo what a human–AI team can ship when they iterate together.
-              Pick a graphics tier, tune look &amp; volume, then load.
+              If you want to shred tokens, keep trying to one-shot. If you want to make something fun, iterate like a game designer.
+              <br /><a href="https://x.com/sidriff" target="_blank" rel="noopener noreferrer">— @sidriff</a>
             </p>
 
             <div class="boot-status">
@@ -561,18 +1096,191 @@
             </div>
             <div class="boot-meta" id="boot-meta"></div>
 
-            <div class="boot-side-block" style="margin-top:1.25rem">
+            <div class="boot-swap" id="boot-swap">
+            <div class="boot-side-block" id="boot-graphics-block">
               <div class="boot-section-label" id="boot-q-label">Graphics</div>
-              <div class="boot-q-grid" id="boot-quality" role="radiogroup" aria-label="Graphics quality"></div>
-              <p class="boot-q-warn" id="boot-q-warn" role="status"></p>
-              <p class="boot-q-live" id="boot-q-live"></p>
+              <!-- Cards are static so they paint before the game module bundle loads. -->
+              <div class="boot-q-grid" id="boot-quality" role="radiogroup" aria-label="Graphics quality">
+                <button type="button" class="boot-q-card" data-quality="low" role="radio" aria-checked="false">
+                  <div class="boot-q-name"><span>low</span><span class="boot-q-tag">Fast boot</span></div>
+                  <div class="boot-q-desc">Lower res, basic post. Boots quick so you can play and iterate — expect fewer fancy lights and reflections.</div>
+                </button>
+                <button type="button" class="boot-q-card is-on" data-quality="medium" role="radio" aria-checked="true">
+                  <div class="boot-q-name"><span>medium</span><span class="boot-q-tag">Balanced</span></div>
+                  <div class="boot-q-desc">TAA, ambient occlusion, volumetrics. Solid default for a real GPU without melting the fans.</div>
+                </button>
+                <button type="button" class="boot-q-card" data-quality="high" role="radio" aria-checked="false">
+                  <div class="boot-q-name"><span>high</span><span class="boot-q-tag">Full stack</span></div>
+                  <div class="boot-q-desc">SSR, sharper scales, heavier particles. Needs a modern card for a smooth firefight.</div>
+                </button>
+                <button type="button" class="boot-q-card" data-quality="ultra" role="radio" aria-checked="false">
+                  <div class="boot-q-name"><span>ultra</span><span class="boot-q-tag">Max fidelity</span></div>
+                  <div class="boot-q-desc">Biggest shadows, densest FX, capture baselines. Opt-in only — not the everyday boot.</div>
+                </button>
+              </div>
+              <div class="boot-q-foot">
+                <p class="boot-q-warn" id="boot-q-warn" role="status"></p>
+                <p class="boot-q-live" id="boot-q-live"></p>
+              </div>
             </div>
 
+            <div class="boot-side-block is-off" id="boot-weapons-block" aria-hidden="true">
+              <div class="boot-section-label">Weapons · 1 · 2 · 3 · G</div>
+              <div class="boot-arsenal-grid" aria-label="Loadout">
+                <article class="boot-wep" data-wep="rifle">
+                  <div class="boot-wep-top">
+                    <span class="boot-wep-slot">1</span>
+                    <span class="boot-wep-class">Carbine · 5.56×45</span>
+                  </div>
+                  <h3 class="boot-wep-name">M4A1</h3>
+                  <div class="boot-wep-role">Primary · Marksman carbine</div>
+                  <svg class="boot-wep-sil" viewBox="0 0 180 40" fill="currentColor" aria-hidden="true">
+                    <path d="M8 22h14l2-4 6-1 4 5h18l3-2 8 2h22l2-3h26l3 3h16l4-6 3 1 4 5h10v3H12l-4-3z"/>
+                    <path d="M52 14h36l1 3H52z" opacity="0.7"/>
+                    <path d="M64 12h6v3h-6z"/>
+                    <path d="M40 25h7v6h-3l-2 4h-4l1-4h-2z" opacity="0.65"/>
+                    <path d="M118 25h16l1 4H118z" opacity="0.5"/>
+                    <path d="M148 20h8v4h-8z" opacity="0.55"/>
+                  </svg>
+                  <p class="boot-wep-blurb">
+                    Workhorse. Full-auto climb you can learn, hard penetration,
+                    and a tight red-dot zoom for mid-to-long fights.
+                  </p>
+                  <div class="boot-wep-specs">
+                    <span class="boot-wep-chip">800 RPM</span>
+                    <span class="boot-wep-chip">30+1</span>
+                    <span class="boot-wep-chip">AUTO · BURST · SEMI</span>
+                    <span class="boot-wep-chip">~2.8× ADS</span>
+                  </div>
+                  <div class="boot-wep-stats" aria-hidden="true">
+                    <div class="boot-wep-stat"><span>DMG</span><div class="boot-wep-bar"><i style="--v:78%"></i></div></div>
+                    <div class="boot-wep-stat"><span>RANGE</span><div class="boot-wep-bar"><i style="--v:92%"></i></div></div>
+                    <div class="boot-wep-stat"><span>ROF</span><div class="boot-wep-bar"><i style="--v:68%"></i></div></div>
+                    <div class="boot-wep-stat"><span>CTRL</span><div class="boot-wep-bar"><i style="--v:62%"></i></div></div>
+                  </div>
+                  <div class="boot-wep-foot">Default deploy · pull down the climb</div>
+                </article>
+
+                <article class="boot-wep" data-wep="smg">
+                  <div class="boot-wep-top">
+                    <span class="boot-wep-slot">2</span>
+                    <span class="boot-wep-class">SMG · 9×19</span>
+                  </div>
+                  <h3 class="boot-wep-name">MPX-9</h3>
+                  <div class="boot-wep-role">Close quarters · Spray box</div>
+                  <svg class="boot-wep-sil" viewBox="0 0 180 40" fill="currentColor" aria-hidden="true">
+                    <path d="M28 21h12l2-3 5-1 3 4h14l2-2h18l2 2h14l3-4 2 4h12l1 3H32l-4-3z"/>
+                    <path d="M22 20h8l2 4H24z" opacity="0.55"/>
+                    <path d="M62 13h22l1 3H62z" opacity="0.7"/>
+                    <path d="M72 11h5v3h-5z"/>
+                    <path d="M54 25h5v5h-2v3h-3z"/>
+                    <path d="M88 25h5v7h-5z" opacity="0.75"/>
+                    <path d="M120 24h14l1 3H120z" opacity="0.5"/>
+                  </svg>
+                  <p class="boot-wep-blurb">
+                    Soft kick, high volume. Melts rooms up close — soft on armor
+                    and dies past mid-range. Track, don’t snipe.
+                  </p>
+                  <div class="boot-wep-specs">
+                    <span class="boot-wep-chip">950 RPM</span>
+                    <span class="boot-wep-chip">32 RD</span>
+                    <span class="boot-wep-chip">AUTO · SEMI</span>
+                    <span class="boot-wep-chip">LOW PEN</span>
+                  </div>
+                  <div class="boot-wep-stats" aria-hidden="true">
+                    <div class="boot-wep-stat"><span>DMG</span><div class="boot-wep-bar"><i style="--v:48%"></i></div></div>
+                    <div class="boot-wep-stat"><span>RANGE</span><div class="boot-wep-bar"><i style="--v:38%"></i></div></div>
+                    <div class="boot-wep-stat"><span>ROF</span><div class="boot-wep-bar"><i style="--v:88%"></i></div></div>
+                    <div class="boot-wep-stat"><span>CTRL</span><div class="boot-wep-bar"><i style="--v:84%"></i></div></div>
+                  </div>
+                  <div class="boot-wep-foot">CQC specialist · hold the lane</div>
+                </article>
+
+                <article class="boot-wep" data-wep="pistol">
+                  <div class="boot-wep-top">
+                    <span class="boot-wep-slot">3</span>
+                    <span class="boot-wep-class">Sidearm · 9×19</span>
+                  </div>
+                  <h3 class="boot-wep-name">P-19</h3>
+                  <div class="boot-wep-role">Backup · Snap shots</div>
+                  <svg class="boot-wep-sil" viewBox="0 0 180 40" fill="currentColor" aria-hidden="true">
+                    <path d="M58 15h48l4 2 12 1 3 4H62l-2-2 1-3 2-2z"/>
+                    <path d="M66 22h12l3 8h-4l-3 5h-5l2-5h-3z"/>
+                    <path d="M88 22h28v3H88z" opacity="0.55"/>
+                    <path d="M100 12h10l1 3h-10z"/>
+                    <path d="M118 14h8v2h-8z" opacity="0.65"/>
+                  </svg>
+                  <p class="boot-wep-blurb">
+                    Last resort with teeth. Semi only — pace your shots.
+                    Fastest draw and reload when the primary runs dry.
+                  </p>
+                  <div class="boot-wep-specs">
+                    <span class="boot-wep-chip">460 RPM</span>
+                    <span class="boot-wep-chip">17 RD</span>
+                    <span class="boot-wep-chip">SEMI</span>
+                    <span class="boot-wep-chip">FAST SWAP</span>
+                  </div>
+                  <div class="boot-wep-stats" aria-hidden="true">
+                    <div class="boot-wep-stat"><span>DMG</span><div class="boot-wep-bar"><i style="--v:58%"></i></div></div>
+                    <div class="boot-wep-stat"><span>RANGE</span><div class="boot-wep-bar"><i style="--v:28%"></i></div></div>
+                    <div class="boot-wep-stat"><span>ROF</span><div class="boot-wep-bar"><i style="--v:32%"></i></div></div>
+                    <div class="boot-wep-stat"><span>CTRL</span><div class="boot-wep-bar"><i style="--v:44%"></i></div></div>
+                  </div>
+                  <div class="boot-wep-foot">Emergency · don’t spam the bloom</div>
+                </article>
+
+                <article class="boot-wep" data-wep="grenade">
+                  <div class="boot-wep-top">
+                    <span class="boot-wep-slot">G</span>
+                    <span class="boot-wep-class">Lethal · Frag</span>
+                  </div>
+                  <h3 class="boot-wep-name">M67</h3>
+                  <div class="boot-wep-role">Grenade · Cook &amp; lob</div>
+                  <svg class="boot-wep-sil" viewBox="0 0 180 40" fill="currentColor" aria-hidden="true">
+                    <ellipse cx="90" cy="24" rx="14" ry="11"/>
+                    <rect x="84" y="10" width="12" height="6" rx="1" opacity="0.85"/>
+                    <path d="M88 10c0-4 2-7 4-8 1 2 2 5 2 8" fill="none" stroke="currentColor" stroke-width="1.6" opacity="0.7"/>
+                    <path d="M78 22h24M80 26h20M82 30h16" opacity="0.35" stroke="currentColor" stroke-width="1" fill="none"/>
+                  </svg>
+                  <p class="boot-wep-blurb">
+                    Two frags per life. Lob on a ~2.4s fuse — clear rooms,
+                    break holds, don’t bounce one back at yourself.
+                  </p>
+                  <div class="boot-wep-specs">
+                    <span class="boot-wep-chip">×2</span>
+                    <span class="boot-wep-chip">~2.4s FUSE</span>
+                    <span class="boot-wep-chip">6.5m BLAST</span>
+                    <span class="boot-wep-chip">KEY G</span>
+                  </div>
+                  <div class="boot-wep-stats" aria-hidden="true">
+                    <div class="boot-wep-stat"><span>DMG</span><div class="boot-wep-bar"><i style="--v:95%"></i></div></div>
+                    <div class="boot-wep-stat"><span>RADIUS</span><div class="boot-wep-bar"><i style="--v:72%"></i></div></div>
+                    <div class="boot-wep-stat"><span>SPEED</span><div class="boot-wep-bar"><i style="--v:55%"></i></div></div>
+                    <div class="boot-wep-stat"><span>AMMO</span><div class="boot-wep-bar"><i style="--v:30%"></i></div></div>
+                  </div>
+                  <div class="boot-wep-foot">Soft peek · hard punish</div>
+                </article>
+              </div>
+            </div>
+            </div><!-- /.boot-swap -->
+
             <div class="boot-actions">
-              <button type="button" id="boot-deploy" class="is-action">
-                <span class="boot-spinner" aria-hidden="true"></span>
-                <span class="boot-deploy-label">Load</span>
-              </button>
+              <div class="boot-cta-row">
+                <label
+                  class="boot-fullscreen"
+                  for="boot-fullscreen"
+                  title="Fullscreen lets the game lock Ctrl+WASD so crouch-walk does not close the tab"
+                >
+                  <input type="checkbox" id="boot-fullscreen" checked />
+                  <span>Fullscreen</span>
+                  <span class="boot-fullscreen-sub">· crouch</span>
+                </label>
+                <button type="button" id="boot-deploy" class="is-action">
+                  <span class="boot-spinner" aria-hidden="true"></span>
+                  <span class="boot-deploy-label">Load</span>
+                </button>
+              </div>
+              <button type="button" id="boot-retreat" title="Back to menu">Retreat</button>
               <span class="boot-hint" id="boot-hint">Select a tier, then load</span>
             </div>
           </div>
@@ -583,12 +1291,14 @@
               <ul class="boot-controls">
                 <li><kbd>WASD</kbd></li><li>Move</li>
                 <li><kbd>Mouse</kbd></li><li>Look · LMB fire · RMB ADS</li>
+                <li><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></li><li>Rifle · SMG · Pistol</li>
                 <li><kbd>Shift</kbd></li><li>Sprint</li>
                 <li><kbd>Ctrl</kbd> / <kbd>C</kbd></li><li>Crouch</li>
                 <li><kbd>Space</kbd></li><li>Jump</li>
                 <li><kbd>R</kbd></li><li>Reload</li>
                 <li><kbd>Q</kbd> / <kbd>E</kbd></li><li>Lean</li>
                 <li><kbd>G</kbd></li><li>Grenade</li>
+                <li><kbd>B</kbd></li><li>Fire mode</li>
                 <li><kbd>Esc</kbd></li><li>Pause / settings</li>
               </ul>
             </div>
@@ -625,10 +1335,35 @@
               </div>
             </div>
           </div>
+
+          <div class="boot-load-board" id="boot-leaderboard">
+            <div class="boot-side-block">
+              <div class="boot-section-label">Leaderboard</div>
+              <p class="boot-lb-formula" title="Body kill 100 · Headshot 150 · Ally mult never drops below 1×">
+                <strong>Score</strong> = (time&nbsp;s + combat&nbsp;pts) × squad
+                <span class="boot-lb-formula-sub">100 body · 150 headshot · ×1–3 allies up</span>
+              </p>
+              <p class="boot-lb-status" id="boot-lb-status">Loading…</p>
+              <div class="boot-lb-head" aria-hidden="true">
+                <span>#</span><span>Operator</span><span>Time</span><span>Squad</span><span>Score</span>
+              </div>
+              <ol class="boot-lb-list" id="boot-lb-list"></ol>
+              <div class="boot-lb-auth" id="boot-lb-auth">
+                <p class="boot-lb-cta">Log in with X to post your score</p>
+                <div class="boot-lb-actions">
+                  <button type="button" class="boot-lb-btn primary" id="boot-lb-login">Log in with X</button>
+                  <button type="button" class="boot-lb-btn" id="boot-lb-logout" hidden>Sign out</button>
+                  <span class="boot-lb-who" id="boot-lb-who" hidden></span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
+    <!-- Leaderboard boots with the title shell (menu music), not after Load. -->
+    <script type="module" src="/src/social/boot.js"></script>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

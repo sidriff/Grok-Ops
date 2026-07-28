@@ -9,10 +9,14 @@ import { DEG } from './mathx.js';
  * too (an M4A1 is 800 rpm and reaches the optic in about 220 ms).
  *
  * Recoil is split in two, exactly as a modern shooter does it:
- *   - `pattern`  a DETERMINISTIC per-shot camera climb a player can memorise
- *                and counter. Generated once from a fixed seed.
+ *   - `pattern`  DETERMINISTIC per-shot aim climb written into the player's
+ *                look angles (permanent until they counter-steer). Generated
+ *                once from a fixed seed so a burst is learnable.
  *   - `spread`   a random cone that grows with sustained fire and shrinks when
  *                aiming, crouched or still. This is the part you cannot learn.
+ *
+ * A short camera-spring flinch rides on top of the pattern for punch; it is
+ * not the climb — that lives in movement pitch/yaw via `player.addAimClimb`.
  */
 
 export const WEAPON_DEFS = {
@@ -61,7 +65,9 @@ export const WEAPON_DEFS = {
     },
     /* --- handling (seconds) --- */
     adsTime: 0.22,
-    adsFov: 0.74,
+    /* World FOV multiplier at full ADS. Live zoom used to be the global
+     * adsFovScale (0.72 ≈ 1.4×); ~0.36 is ~2× that angular zoom (~2.8× hip). */
+    adsFov: 0.36,
     viewFov: 0.86,
     reloadTac: 2.1,
     reloadEmpty: 2.9,

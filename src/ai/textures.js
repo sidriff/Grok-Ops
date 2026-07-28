@@ -234,36 +234,35 @@ export const CAMO = {
   // families are the *pattern*; `budget` is what the finished map is remapped
   // onto (see CLOTH_BUDGET), so these five numbers only set hue and ratio.
   arid: {
-    // desert multicam is the pale one: it gets the top of the window
+    // desert multicam — warm sand (hostile kit)
     budget: 0.104,
-    pale: [0.382, 0.318, 0.212],
-    base: [0.320, 0.256, 0.163],
-    mid: [0.241, 0.186, 0.116],
-    dark: [0.146, 0.111, 0.072],
-    olive: [0.176, 0.190, 0.116],
+    pale: [0.402, 0.308, 0.168],
+    base: [0.338, 0.242, 0.128],
+    mid: [0.258, 0.172, 0.088],
+    dark: [0.158, 0.100, 0.052],
+    olive: [0.188, 0.168, 0.078],
     macro: 2,
     warp: 0.15,
   },
   woodland: {
-    // olive drab in the field sits well under desert tan
+    // mud-olive OPFOR field kit — brown-green, not cool grey
     budget: 0.092,
-    pale: [0.354, 0.340, 0.230],
-    base: [0.246, 0.259, 0.170],
-    mid: [0.174, 0.190, 0.126],
-    dark: [0.104, 0.110, 0.083],
-    olive: [0.210, 0.196, 0.132],
+    pale: [0.348, 0.318, 0.188],
+    base: [0.238, 0.242, 0.132],
+    mid: [0.168, 0.178, 0.100],
+    dark: [0.098, 0.100, 0.062],
+    olive: [0.200, 0.178, 0.098],
     macro: 3,
     warp: 0.17,
   },
   urban: {
-    // wolf grey / near-black urban kit: the darkest of the three, and the one
-    // that reads as a plaster mannequin if it is allowed anywhere near 0.2
+    // cool blue-grey operator kit (friendly squad only)
     budget: 0.083,
-    pale: [0.330, 0.334, 0.342],
-    base: [0.226, 0.230, 0.239],
-    mid: [0.150, 0.154, 0.163],
-    dark: [0.078, 0.079, 0.088],
-    olive: [0.190, 0.188, 0.182],
+    pale: [0.300, 0.328, 0.372],
+    base: [0.198, 0.218, 0.268],
+    mid: [0.128, 0.142, 0.188],
+    dark: [0.062, 0.070, 0.102],
+    olive: [0.168, 0.178, 0.210],
     macro: 2,
     warp: 0.14,
   },

@@ -21,7 +21,7 @@
  *    `now + dist/343`, which is sample-accurate and free.
  */
 
-import { airCutoff, clamp, gain, biquad } from './dsp.js';
+import { airCutoff, clamp, gain, biquad, killVoice } from './dsp.js';
 
 /** Hard pool size. Each live emitter runs a panner chain; overshoot = crackle. */
 const MAX_EMITTERS = 24;
@@ -116,7 +116,8 @@ class Emitter {
       this._sendConnected = false;
     }
     if (this.attached) {
-      try { this.attached.disconnect(); } catch { /* noop */ }
+      // Hard-stop oscillators/buffers — disconnect alone leaves them rendering.
+      killVoice(this.attached);
       this.attached = null;
     }
     this.tracked = false;

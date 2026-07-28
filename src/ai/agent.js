@@ -196,6 +196,7 @@ export class Agent {
     this.stateTime = 0;
     this.squad = opts.squad ?? null;
     this.team = opts.team ?? 1;
+    this.friendly = opts.friendly === true || this.team === 0;
     /** Display name for killfeed / "Killed by" — assigned once at spawn. */
     this.name = opts.name ?? Agent.callsign(this.id, this.variantName);
     this.callsign = this.name;
@@ -208,12 +209,15 @@ export class Agent {
     this.hasTarget = false;
     this.targetVisible = false;
     this.target = null;
+    /** Agent | 'player' | null — who lastKnown currently tracks. */
+    this.targetRef = null;
     this.lastKnown = new THREE.Vector3();
     this.lastKnownAge = Infinity;
     this.searchPoint = new THREE.Vector3();
     this.suppression = 0;
     this.reactionTimer = 0;
     this.alertness = 0;
+    this._lastAttacker = null;
 
     /* ---------------- combat ---------------- */
     this.weaponRange = 60;
@@ -224,6 +228,11 @@ export class Agent {
     this.magSize = 30;
     this.ammo = this.magSize;
     this.spread = 0.032;
+    /**
+     * Multiplier on cone-of-fire (>1 = worse). Survival director ramps hostiles
+     * from spray-and-pray toward competent as the match ages.
+     */
+    this.accuracyMul = opts.accuracyMul ?? 1;
     this.weaponDamage = 17;
     this.aimTarget = new THREE.Vector3();
     this.aimActual = new THREE.Vector3();
@@ -253,6 +262,13 @@ export class Agent {
     this.coverPos = new THREE.Vector3();
     this.patrolPoints = opts.patrol ?? null;
     this.patrolIndex = 0;
+    /**
+     * Blue-team bodyguard: keep a formation slot on the player when not in a
+     * firefight. Set at spawn for allies (`team === 0`).
+     */
+    this.escort = opts.escort === true || this.team === 0;
+    this.escortSlot = opts.escortSlot ?? 0;
+    this._escortRepath = 0;
     this.stuckTimer = 0;
     this.vaultCooldown = 0;
     /** a path request the frame budget pushed to the next frame */
@@ -316,36 +332,84 @@ export class Agent {
   /* perception                                                         */
   /* ================================================================== */
 
+  /**
+   * Sample the best living hostile in the cone (player and/or opposite-team
+   * agents). Hostiles hunt the player + blue team; allies hunt reds only.
+   */
   _sense(dt) {
-    const player = this.ai.playerPosition(this._v3);
-    if (!player) return;
     const eye = this.eye;
-    const to = this._dir.copy(player).sub(eye);
-    const dist = to.length();
-    let visible = false;
-    if (dist < this.viewRange) {
-      to.multiplyScalar(1 / dist);
-      const fwd = this._v2.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-      const dot = fwd.x * to.x + fwd.z * to.z;
-      // peripheral vision widens once alerted
-      const cone = this.hasTarget ? -0.2 : this.viewCos - this.alertness * 0.25;
-      if (dot > cone || dist < 4.5) {
-        visible = this.phys ? this.phys.lineOfSight(eye, player, this.phys.MASK.SIGHT) : true;
-      }
-    }
-    this.targetVisible = visible;
+    const fwd = this._v2.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    const cone = this.hasTarget ? -0.2 : this.viewCos - this.alertness * 0.25;
 
-    if (visible) {
-      // reaction: fast head-on and close, slow at the edge of vision
-      const rate = 1 / Math.max(0.12, 0.16 + dist * 0.0075 + (1 - this.alertness) * 0.28);
+    let best = null;
+    let bestDist = Infinity;
+    let bestPos = null;
+    let bestVisible = false;
+
+    // Stick with current target when still visible — reduces target thrash.
+    const prefer = this.targetRef;
+
+    const consider = (ref, pos) => {
+      if (!pos || !Number.isFinite(pos.x)) return;
+      const dx = pos.x - eye.x;
+      const dy = pos.y - eye.y;
+      const dz = pos.z - eye.z;
+      const dist = Math.hypot(dx, dy, dz);
+      if (dist > this.viewRange || dist < 1e-4) return;
+      const inv = 1 / dist;
+      const dot = fwd.x * dx * inv + fwd.z * dz * inv;
+      if (dot <= cone && dist >= 4.5) return;
+      const visible = this.phys
+        ? this.phys.lineOfSight(eye, pos, this.phys.MASK.SIGHT)
+        : true;
+      if (!visible) return;
+      // Prefer the current lock; otherwise nearest.
+      const score = dist * (prefer && prefer === ref ? 0.55 : 1);
+      if (score < bestDist) {
+        bestDist = score;
+        best = ref;
+        bestPos = pos;
+        bestVisible = true;
+      }
+    };
+
+    // Hostiles (team !== 0) hunt the local player.
+    if (this.team !== 0) {
+      const playerChest = this.ai.playerPosition(this._v3);
+      if (playerChest) consider('player', playerChest);
+    }
+
+    // Opposite-team agents (allies ↔ hostiles). Skip corpses / stage props
+    // that aren't real combatants.
+    const list = this.ai.agents;
+    for (let i = 0; i < list.length; i++) {
+      const o = list[i];
+      if (!o || o === this || !o.alive || o.isPlayerCorpse || o.isStageProp) continue;
+      if (o.team === this.team) continue;
+      // Aim at chest height so LOS / lead match the player probe.
+      this._v.set(o.position.x, o.position.y + 1.35, o.position.z);
+      consider(o, this._v);
+    }
+
+    this.targetVisible = bestVisible;
+
+    if (bestVisible && bestPos) {
+      const rate = 1 / Math.max(0.12, 0.16 + bestDist * 0.0075 + (1 - this.alertness) * 0.28);
       this.awareness = Math.min(1, this.awareness + dt * rate);
-      this.lastKnown.copy(player);
+      // Re-sample live positions each frame for the locked ref.
+      if (best === 'player') {
+        this.ai.playerPosition(this.lastKnown);
+      } else if (best?.position) {
+        this.lastKnown.set(best.position.x, best.position.y + 1.35, best.position.z);
+      } else {
+        this.lastKnown.copy(bestPos);
+      }
       this.lastKnownAge = 0;
       this.alertness = 1;
       if (this.awareness >= 1) {
         this.hasTarget = true;
-        this.target = player;
-        // First lock this engagement — the bark that says "they saw me".
+        this.targetRef = best;
+        this.target = this.lastKnown;
         if (!this._hadTarget) {
           this._hadTarget = true;
           this._bark('spot');
@@ -353,9 +417,20 @@ export class Agent {
       }
     } else {
       this.awareness = Math.max(0, this.awareness - dt * 0.35);
+      // Keep lastKnown fresh while the locked body is still alive even if
+      // momentarily occluded (allies especially need this for push-through).
+      if (this.hasTarget && this.targetRef && this.targetRef !== 'player') {
+        const t = this.targetRef;
+        if (!t.alive) {
+          this.hasTarget = false;
+          this._hadTarget = false;
+          this.targetRef = null;
+        }
+      }
       if (this.hasTarget && this.lastKnownAge > 6.5) {
         this.hasTarget = false;
         this._hadTarget = false;
+        this.targetRef = null;
       }
     }
   }
@@ -447,26 +522,101 @@ export class Agent {
     return this._goTo(this.lastKnown);
   }
 
+  /**
+   * Stick to the local player in a three-man wedge behind them. Slot 0/1/2 =
+   * left / centre / right. Sprint when the player runs off; idle when close.
+   */
+  _escortFollow(dt) {
+    const player = this.ai.ctx?.peek?.('player');
+    const pos = player?.position;
+    if (!pos || !Number.isFinite(pos.x)) {
+      this.desiredSpeed = 0;
+      return;
+    }
+
+    // Player look yaw: forward is (-sin yaw, -cos yaw) in this engine.
+    const yaw = player.movement?.yaw ?? player.yaw ?? 0;
+    const fx = -Math.sin(yaw);
+    const fz = -Math.cos(yaw);
+    const rx = -fz;
+    const rz = fx;
+
+    const slot = ((this.escortSlot % 3) + 3) % 3;
+    const laterals = [-2.15, 0.2, 2.15];
+    const backs = [2.7, 3.4, 2.7];
+    const lat = laterals[slot];
+    const back = backs[slot] + (this.id % 3) * 0.15;
+
+    this._v.set(
+      pos.x - fx * back + rx * lat,
+      pos.y,
+      pos.z - fz * back + rz * lat
+    );
+
+    const toSlot = this.position.distanceTo(this._v);
+    const toPlayer = this.position.distanceTo(pos);
+    this.crouch = false;
+    this.aimWeight = Math.max(0.2, this.aimWeight - dt * 0.5);
+
+    // In the pocket: hold, face roughly the way the player faces.
+    if (toSlot < 1.15 && toPlayer < 6.5) {
+      this.desiredSpeed = 0;
+      this.hasMoveTarget = false;
+      this.pathPending = false;
+      this.targetYaw = yaw;
+      return;
+    }
+
+    // Catch-up: walk → run → sprint as the player opens the gap.
+    if (toPlayer > 16) this.desiredSpeed = 5.4;
+    else if (toPlayer > 9) this.desiredSpeed = 4.2;
+    else if (toPlayer > 5) this.desiredSpeed = 3.1;
+    else this.desiredSpeed = 2.4;
+
+    this._escortRepath -= dt;
+    const needPath =
+      this._escortRepath <= 0 ||
+      !this.hasMoveTarget ||
+      this.position.distanceTo(this.moveTarget) < 1.05;
+    if (needPath && !this.pathPending) {
+      this._escortRepath = this.rng.range(0.28, 0.55);
+      this._goTo(this._v);
+    }
+  }
+
   _think(dt) {
     const sq = this.squad;
     switch (this.state) {
       case STATE.IDLE:
-        this.desiredSpeed = 0;
         this.crouch = false;
-        this.aimWeight = Math.max(0, this.aimWeight - dt * 0.8);
-        if (this.hasTarget) this._enterCombat();
-        // Start patrol quickly — long idle at spawn is the "statue garrison".
-        else if (this.patrolPoints && this.stateTime > 0.6) this._setState(STATE.PATROL);
-        break;
-
-      case STATE.PATROL: {
-        this.crouch = false;
-        this.desiredSpeed = 1.35;
-        this.aimWeight = Math.max(0.15, this.aimWeight - dt * 0.4);
         if (this.hasTarget) {
           this._enterCombat();
           break;
         }
+        if (this.escort) {
+          this._escortFollow(dt);
+          break;
+        }
+        this.desiredSpeed = 0;
+        this.aimWeight = Math.max(0, this.aimWeight - dt * 0.8);
+        // Start patrol quickly — long idle at spawn is the "statue garrison".
+        if (this.patrolPoints && this.stateTime > 0.6) this._setState(STATE.PATROL);
+        break;
+
+      case STATE.PATROL: {
+        this.crouch = false;
+        if (this.hasTarget) {
+          this._enterCombat();
+          break;
+        }
+        // Escorts never wander a fixed loop — fall through to follow.
+        if (this.escort) {
+          this._setState(STATE.IDLE);
+          this._escortFollow(dt);
+          break;
+        }
+        this.desiredSpeed = 1.35;
+        this.aimWeight = Math.max(0.15, this.aimWeight - dt * 0.4);
         // a route point whose path is still queued is not a route point reached:
         // taking the next one here would walk the patrol index forward for free
         if (this.pathPending) break;
@@ -489,6 +639,12 @@ export class Agent {
           this._enterCombat();
           break;
         }
+        // Escort: short hunt, then rejoin the player instead of looping patrol.
+        if (this.escort && this.lastKnownAge > 5.5) {
+          this._setState(STATE.IDLE);
+          this._escortFollow(dt);
+          break;
+        }
         this.aimWeight = Math.min(0.85, this.aimWeight + dt * 2.2);
         const hunting = this.lastKnownAge < 10;
         if (hunting) {
@@ -498,7 +654,11 @@ export class Agent {
         } else {
           this.desiredSpeed = 1.2;
         }
-        if (this.stateTime > 12) this._setState(this.patrolPoints ? STATE.PATROL : STATE.IDLE);
+        if (this.stateTime > 12) {
+          this._setState(
+            this.escort ? STATE.IDLE : this.patrolPoints ? STATE.PATROL : STATE.IDLE
+          );
+        }
         break;
       }
 
@@ -583,8 +743,20 @@ export class Agent {
   _combat(dt) {
     const target = this.hasTarget ? this.lastKnown : this.lastKnownAge < 5 ? this.lastKnown : null;
     if (!target) {
-      this._setState(STATE.ALERT);
+      this._setState(this.escort ? STATE.IDLE : STATE.ALERT);
       return;
+    }
+    // Bodyguards who get left behind abandon the firefight and rejoin.
+    if (this.escort) {
+      const player = this.ai.ctx?.peek?.('player');
+      const pp = player?.position;
+      if (pp && this.position.distanceTo(pp) > 24) {
+        this.hasTarget = false;
+        this.targetRef = null;
+        this._setState(STATE.IDLE);
+        this._escortFollow(dt);
+        return;
+      }
     }
     const sq = this.squad;
     const dist = this.position.distanceTo(target);
@@ -951,8 +1123,9 @@ export class Agent {
     const an = this.animator;
     const origin = an.muzzleWorld;
     const dir = this._muzzleDir.copy(an.muzzleDir);
-    // cone of fire: worse when suppressed, better the longer we have been aiming
-    const spread = this.spread * (1 + this.suppression * 1.5);
+    // cone of fire: worse when suppressed, and scaled by accuracyMul (survival
+    // director uses this to start the match easy and tighten later).
+    const spread = this.spread * this.accuracyMul * (1 + this.suppression * 1.5);
     dir.x += this.rng.gauss() * spread;
     dir.y += this.rng.gauss() * spread * 0.8;
     dir.z += this.rng.gauss() * spread;
@@ -981,9 +1154,11 @@ export class Agent {
    * @param part    'head' | 'torso' | 'arm' | 'leg'
    * @param point   world impact point
    * @param dir     incident direction (unit)
+   * @param source  who dealt it (player / agent) — killfeed + revenge targeting
    */
-  applyDamage(amount, part, point, dir) {
+  applyDamage(amount, part, point, dir, source = null) {
     if (!this.alive) return;
+    if (source) this._lastAttacker = source;
     this.health -= amount;
     this.alertness = 1;
     this.suppression = Math.min(1.6, this.suppression + 0.35);
@@ -994,6 +1169,9 @@ export class Agent {
         this.lastKnown.copy(this._v);
         this.lastKnownAge = 0.4;
       }
+    } else if (source?.position) {
+      this.lastKnown.set(source.position.x, source.position.y + 1.35, source.position.z);
+      this.lastKnownAge = 0.2;
     }
     if (this.state === STATE.IDLE || this.state === STATE.PATROL) {
       this._setState(STATE.ALERT);
@@ -1054,6 +1232,7 @@ export class Agent {
     }
     this.ctx.events.emit('actor:death', {
       actor: this,
+      by: this._lastAttacker,
       point: hitPoint,
       impulse,
       headshot: false,
@@ -1191,10 +1370,16 @@ export class Agent {
   }
 
   dispose() {
+    this.alive = false;
+    this.wantFire = false;
+    this.ai.cover?.release?.(this.id);
     if (this.controller) this.phys?.removeCharacter(this.controller);
+    this.controller = null;
     for (const c of this.colliders) this.phys?.removeCollider(c);
     this.colliders.length = 0;
     if (this.ragdoll) this.phys?.removeRagdoll(this.ragdoll);
+    this.ragdoll = null;
+    this.__ragdoll = null;
     this.group.parent?.remove(this.group);
   }
 }

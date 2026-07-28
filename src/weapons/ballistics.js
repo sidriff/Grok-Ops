@@ -30,6 +30,8 @@ class Projectile {
     this.dropoff = 0.5;
     this.weapon = null;
     this.mask = undefined;
+    /** Who fired — forwarded into physics so kills credit the right side. */
+    this.source = null;
   }
 }
 
@@ -54,7 +56,7 @@ export class ProjectileSim {
 
   /**
    * @param {object} o origin, dir (unit), speed, damage, penetration, dragK,
-   *                   maxRange, dropoff, weapon, tracer
+   *                   maxRange, dropoff, weapon, tracer, source
    */
   spawn(o) {
     let p = null;
@@ -84,6 +86,7 @@ export class ProjectileSim {
     p.age = 0;
     p.weapon = o.weapon ?? null;
     p.mask = o.mask;
+    p.source = o.source ?? null;
     this.live.push(p);
     this.stats.fired++;
 
@@ -138,6 +141,7 @@ export class ProjectileSim {
             penetration: p.penetration,
             dropoff: 1,
             mask: p.mask,
+            source: p.source,
           });
           this.stats.impacts++;
           this._retire(p);
@@ -157,6 +161,7 @@ export class ProjectileSim {
   _retire(p) {
     p.alive = false;
     p.weapon = null;
+    p.source = null;
   }
 
   clear() {

@@ -602,6 +602,11 @@ const CSS = `
   position:absolute; inset:0;
   pointer-events:none;
   will-change: opacity;
+  z-index: 40;
+}
+.ow-death.endgame {
+  pointer-events:auto;
+  cursor:default;
 }
 .ow-death-scrim {
   position:absolute; inset:0;
@@ -650,6 +655,66 @@ const CSS = `
   will-change: transform, color;
 }
 .ow-death-timer.tick { color: var(--amber); }
+.ow-death-name.win { color: var(--friend); text-shadow: var(--sh-o2), 0 0 24px rgba(120,190,255,.35); }
+.ow-death-stats {
+  margin-top: calc(var(--u) * 3.5);
+  display:flex; flex-direction:column; gap: calc(var(--u) * 1.2);
+  align-items:center;
+}
+.ow-death-stat {
+  font-size: calc(12px * var(--k)); letter-spacing:.28em; color: var(--ink-2);
+  text-shadow: var(--sh-o1);
+}
+.ow-death-actions {
+  margin-top: calc(var(--u) * 5);
+  display:flex; flex-wrap:wrap; gap: calc(var(--u) * 2);
+  align-items:center; justify-content:center;
+  pointer-events:auto;
+}
+.ow-death-retry,
+.ow-death-retreat {
+  appearance:none; margin:0;
+  border:1px solid rgba(255,255,255,.28);
+  background: rgba(255,255,255,.08);
+  color: var(--ink);
+  font-family: var(--ff); font-weight:700; text-transform:uppercase;
+  font-size: calc(13px * var(--k)); letter-spacing:.32em;
+  padding: calc(var(--u) * 2.4) calc(var(--u) * 6);
+  cursor:pointer; pointer-events:auto;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.ow-death-retry:hover {
+  background: var(--ink); color:#0b0d0f; border-color: var(--ink);
+}
+.ow-death-retreat {
+  border-color: rgba(255,255,255,.16);
+  background: transparent;
+  color: var(--ink-2);
+  letter-spacing:.28em;
+}
+.ow-death-retreat:hover {
+  background: rgba(255,80,60,.12);
+  border-color: rgba(255,80,60,.45);
+  color: var(--ink);
+}
+
+/* ============================================================== nameplate */
+.ow-nameplate {
+  position:absolute; left:50%; top: calc(50% + 28px * var(--k));
+  transform: translateX(-50%);
+  text-align:center; pointer-events:none;
+  text-shadow: var(--sh-o2);
+}
+.ow-nameplate-tag {
+  font-family: var(--fd);
+  font-size: calc(13px * var(--k)); font-weight:700; letter-spacing:.22em;
+}
+.ow-nameplate.friend .ow-nameplate-tag { color: var(--friend); }
+.ow-nameplate.enemy .ow-nameplate-tag { color: var(--enemy); }
+.ow-nameplate-sub {
+  margin-top: calc(var(--u) * 0.6);
+  font-size: calc(9px * var(--k)); letter-spacing:.28em; color: var(--ink-2);
+}
 
 /* ================================================================== menu */
 .ow-menu {

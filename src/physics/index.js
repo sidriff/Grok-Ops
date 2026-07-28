@@ -706,11 +706,24 @@ export class PhysicsSystem {
    * Returns an array of impact records (reused; copy what you keep).
    */
   fireBullet(opts) {
-    const n = this.ballistics.fire({ rng: this.rng, ...opts });
-    const res = this._impactResult;
-    res.length = 0;
-    for (let i = 0; i < n; i++) res.push(this.ballistics.impacts[i]);
-    return res;
+    // Source rides through emitImpact so UI / AI can attribute damage (player
+    // vs AI) instead of every actor hit looking like a local kill.
+    this._shotSource = opts?.source ?? null;
+    if (opts?.origin) {
+      this._shotOrigin = this._shotOrigin ?? new THREE.Vector3();
+      this._shotOrigin.copy(opts.origin);
+    } else if (this._shotOrigin) {
+      this._shotOrigin.set(0, 0, 0);
+    }
+    try {
+      const n = this.ballistics.fire({ rng: this.rng, ...opts });
+      const res = this._impactResult;
+      res.length = 0;
+      for (let i = 0; i < n; i++) res.push(this.ballistics.impacts[i]);
+      return res;
+    } finally {
+      this._shotSource = null;
+    }
   }
 
   emitImpact(px, py, pz, nx, ny, nz, dx, dy, dz, si, damage, exit, hit) {
@@ -727,6 +740,7 @@ export class PhysicsSystem {
     p.body = hit?.body ?? null;
     p.actor = hit?.actor ?? null;
     p.part = hit?.part ?? null;
+    p.source = this._shotSource ?? null;
     this.ctx.events.emit('bullet:impact', p);
 
     if (p.actor && !exit) {
@@ -736,6 +750,9 @@ export class PhysicsSystem {
         headshot: hit?.part === 'head',
         killed: false,
         point: p.point,
+        from: this._shotOrigin ?? null,
+        source: this._shotSource ?? null,
+        incident: p.incident,
       });
     }
   }

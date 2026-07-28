@@ -26,7 +26,7 @@
 
 import {
   ad, biquad, clamp, gain, hit, lerp, osc, saturationCurve, semis, series, shaper,
-  struckResonator, sweep,
+  struckResonator, sweep, trackSource,
 } from './dsp.js';
 
 /**
@@ -133,6 +133,11 @@ function roundRobin(profile, rng) {
 /**
  * Synthesize one shot.
  *
+ * Distance LOD (node budget under firefight load):
+ *   2 near / FP  — full stack (transient, body, crack, mid, tail, mech, boom)
+ *   1 mid        — body + crack + short tail (no bolt, bounce, pellets)
+ *   0 far        — rolling boom + filtered pink only (~5 nodes)
+ *
  * @param {BaseAudioContext} actx
  * @param {import('./dsp.js').NoiseBank} bank
  * @param {import('../core/rng.js').Rng} rng
@@ -144,6 +149,10 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
   const t0 = o.when ?? actx.currentTime;
   const dist = Math.max(0, o.distance ?? 0);
   const fp = !!o.firstPerson;
+  // Explicit lod wins; otherwise distance bands (FP always full).
+  const lod = o.lod != null
+    ? (o.lod | 0)
+    : (fp || dist < 8 ? 2 : dist < 40 ? 1 : 0);
 
   const rr = roundRobin(profile, rng);
   profile._rrIndex = (profile._rrIndex + 1) % RR_SLOTS;
@@ -165,10 +174,34 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
   const out = gain(actx, 0.46);
   let end = t0 + 0.2;
 
-  /* ---- 1. transient --------------------------------------------- */
-  if (nearP > 0.05) {
+  /* ---- FAR LOD: boom + soft mid only (cheap world fire) -------- */
+  if (lod <= 0) {
+    const boomDur = 0.32 + dist * 0.0055;
+    const src = bank.source('brown', rng, rng.range(0.6, 1.0), false, out);
+    const lp = biquad(actx, 'lowpass', 380, 0.8);
+    const bg = gain(actx, 0);
+    series(src, lp, bg).connect(out);
+    sweep(lp.frequency, t0, 560, 160, boomDur);
+    ad(bg.gain, t0, 1.05 * profile.level * jL, 0.014 + dist * 0.0004, boomDur);
+    src.start(t0, src._offset, boomDur * 1.4 + 0.05);
+    end = t0 + boomDur * 1.4;
+
+    // Thin pink body so far shots still have a little mid presence.
+    const mid = bank.source('pink', rng, rng.range(0.7, 1.0), false, out);
+    const mbp = biquad(actx, 'bandpass', lerp(420, 280, clamp(dist / 120, 0, 1)), 0.9);
+    const mg = gain(actx, 0);
+    series(mid, mbp, mg).connect(out);
+    ad(mg.gain, t0, 0.55 * profile.level * jL, 0.006, 0.14 + dist * 0.001);
+    mid.start(t0, mid._offset, 0.35);
+
+    const send = profile.send * (1.35 + far * 0.5) * (o.echoBoost ?? 1);
+    return { node: out, end: end + 0.05, send };
+  }
+
+  /* ---- 1. transient (near only — mid/far already lost it) ------- */
+  if (lod >= 2 && nearP > 0.05) {
     const tg = gain(actx, 0);
-    const src = bank.source('white', rng, rng.range(0.9, 1.3));
+    const src = bank.source('white', rng, rng.range(0.9, 1.3), false, out);
     const hp = biquad(actx, 'highpass', 2600, 0.6);
     const pk = biquad(actx, 'peaking', 6200 * jC, 1.1, 8 + v.tilt);
     series(src, hp, pk, tg).connect(out);
@@ -176,7 +209,7 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     src.start(t0, src._offset, 0.05);
     // A single-cycle sine at the top of the click adds the "snap" that pure
     // noise cannot produce.
-    const clk = osc(actx, 'triangle', 1750 * jC);
+    const clk = trackSource(out, osc(actx, 'triangle', 1750 * jC));
     const cg = gain(actx, 0);
     clk.connect(cg); cg.connect(out);
     hit(cg.gain, t0, 0.35 * nearP * jL, 0.004);
@@ -186,49 +219,68 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
   /* ---- 2. body + sub -------------------------------------------- */
   {
     const bodyLevel = (0.85 + far * 0.5) * jL * profile.level;
-    const b1 = osc(actx, 'sine', profile.bodyF * jB);
-    const b2 = osc(actx, 'triangle', profile.bodyF * jB * 0.5);
+    const b1 = trackSource(out, osc(actx, 'sine', profile.bodyF * jB));
+    // Mid LOD drops the second body partial + waveshaper: big node savings.
+    const useDrive = lod >= 2;
+    const b2 = useDrive ? trackSource(out, osc(actx, 'triangle', profile.bodyF * jB * 0.5)) : null;
     const bg = gain(actx, 0);
-    const drv = shaper(actx, saturationCurve(profile.drive * v.drive * 0.5, profile.asym), '2x');
     const bodyLP = biquad(actx, 'lowpass', lerp(2200, 700, far), 0.9);
-    b1.connect(bg); b2.connect(bg);
-    series(bg, drv, bodyLP).connect(out);
+    b1.connect(bg);
+    if (b2) b2.connect(bg);
+    if (useDrive) {
+      const drv = shaper(actx, saturationCurve(profile.drive * v.drive * 0.5, profile.asym), '2x');
+      series(bg, drv, bodyLP).connect(out);
+    } else {
+      series(bg, bodyLP).connect(out);
+    }
     sweep(b1.frequency, t0, profile.bodyF * jB, profile.bodyF2 * jB, profile.bodyDecay * 1.4);
-    sweep(b2.frequency, t0, profile.bodyF * jB * 0.5, profile.bodyF2 * jB * 0.55, profile.bodyDecay * 1.6);
-    ad(bg.gain, t0, bodyLevel, 0.0012, profile.bodyDecay * rng.range(0.9, 1.15));
-    b1.start(t0); b2.start(t0);
+    if (b2) {
+      sweep(b2.frequency, t0, profile.bodyF * jB * 0.5, profile.bodyF2 * jB * 0.55, profile.bodyDecay * 1.6);
+    }
+    ad(bg.gain, t0, bodyLevel * (useDrive ? 1 : 1.12), 0.0012, profile.bodyDecay * rng.range(0.9, 1.15));
+    b1.start(t0);
+    if (b2) b2.start(t0);
     const bEnd = t0 + profile.bodyDecay * 1.8 + 0.02;
-    b1.stop(bEnd); b2.stop(bEnd);
+    b1.stop(bEnd);
+    if (b2) b2.stop(bEnd);
     end = Math.max(end, bEnd);
 
-    // Sub thump — this is the one that moves air; keep it out of the reverb.
-    const s = osc(actx, 'sine', profile.subF * jB);
-    const sg = gain(actx, 0);
-    s.connect(sg); sg.connect(out);
-    sweep(s.frequency, t0, profile.subF * jB * 1.5, profile.subF * jB * 0.8, profile.subDecay);
-    ad(sg.gain, t0, (0.5 + far * 0.55) * profile.level, 0.004, profile.subDecay * 1.3);
-    s.start(t0); s.stop(t0 + profile.subDecay * 2 + 0.05);
-    end = Math.max(end, t0 + profile.subDecay * 2 + 0.05);
+    // Sub thump — moves air; skip on mid LOD beyond ~25 m (mostly lost anyway).
+    if (lod >= 2 || dist < 25) {
+      const s = trackSource(out, osc(actx, 'sine', profile.subF * jB));
+      const sg = gain(actx, 0);
+      s.connect(sg); sg.connect(out);
+      sweep(s.frequency, t0, profile.subF * jB * 1.5, profile.subF * jB * 0.8, profile.subDecay);
+      ad(sg.gain, t0, (0.5 + far * 0.55) * profile.level, 0.004, profile.subDecay * 1.3);
+      s.start(t0); s.stop(t0 + profile.subDecay * 2 + 0.05);
+      end = Math.max(end, t0 + profile.subDecay * 2 + 0.05);
+    }
   }
 
   /* ---- 3. crack -------------------------------------------------- */
   if (nearP > 0.03) {
-    const src = bank.source('white', rng, rng.range(0.85, 1.25));
+    const src = bank.source('white', rng, rng.range(0.85, 1.25), false, out);
     const bp = biquad(actx, 'bandpass', profile.crackF * jC, profile.crackQ * v.crackQ);
-    const res = biquad(actx, 'peaking', profile.crackF * jC * 1.9, 1.6, 6 + v.tilt);
-    const drv = shaper(actx, saturationCurve(profile.drive * v.drive, profile.asym * 0.6), '2x');
     const cg = gain(actx, 0);
-    series(src, bp, res, drv, cg).connect(out);
+    if (lod >= 2) {
+      const res = biquad(actx, 'peaking', profile.crackF * jC * 1.9, 1.6, 6 + v.tilt);
+      const drv = shaper(actx, saturationCurve(profile.drive * v.drive, profile.asym * 0.6), '2x');
+      series(src, bp, res, drv, cg).connect(out);
+    } else {
+      // Mid: bandpass only — still reads as calibre, half the nodes.
+      series(src, bp, cg).connect(out);
+    }
     // The crack's own band sweeps down a little: the shock front decays.
     sweep(bp.frequency, t0, profile.crackF * jC * 1.35, profile.crackF * jC * 0.8, profile.crackDecay * 2);
-    ad(cg.gain, t0, 1.05 * nearP * jL * profile.level, 0.0015, profile.crackDecay * rng.range(0.85, 1.2));
+    ad(cg.gain, t0, 1.05 * nearP * jL * profile.level * (lod >= 2 ? 1 : 1.08), 0.0015,
+      profile.crackDecay * rng.range(0.85, 1.2));
     src.start(t0, src._offset, profile.crackDecay * 3 + 0.05);
     end = Math.max(end, t0 + profile.crackDecay * 3);
   }
 
-  /* ---- 4. mid body ---------------------------------------------- */
-  {
-    const src = bank.source('pink', rng, rng.range(0.8, 1.25));
+  /* ---- 4. mid body (near only) ---------------------------------- */
+  if (lod >= 2) {
+    const src = bank.source('pink', rng, rng.range(0.8, 1.25), false, out);
     const bp = biquad(actx, 'bandpass', profile.midF * v.mid, 1.1);
     const mg = gain(actx, 0);
     series(src, bp, mg).connect(out);
@@ -238,8 +290,10 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
 
   /* ---- 5. tail --------------------------------------------------- */
   {
-    const tailDur = profile.tailDecay * jT * (1 + far * 1.6);
-    const src = bank.source('pink', rng, rng.range(0.7, 1.15));
+    // Mid LOD: shorter tail so world automatic fire doesn't pile long pinks.
+    const tailScale = lod >= 2 ? (1 + far * 1.6) : (0.55 + far * 0.7);
+    const tailDur = profile.tailDecay * jT * tailScale;
+    const src = bank.source('pink', rng, rng.range(0.7, 1.15), false, out);
     const lp = biquad(actx, 'lowpass', profile.tailF, 0.6);
     const hp = biquad(actx, 'highpass', lerp(160, 70, far), 0.7);
     const tg = gain(actx, 0);
@@ -250,10 +304,9 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     end = Math.max(end, t0 + tailDur * 1.3);
   }
 
-  /* ---- 6. mechanical / bolt ------------------------------------- */
-  // Only audible close up — a rifle 40 m away has no audible action noise, and
-  // spending nodes on it would be waste.
-  if (dist < 14 && profile.mechLevel > 0) {
+  /* ---- 6. mechanical / bolt (near only) ------------------------- */
+  // Only audible close up — a rifle 40 m away has no audible action noise.
+  if (lod >= 2 && dist < 14 && profile.mechLevel > 0) {
     const md = profile.mechDelay * rng.range(0.85, 1.2);
     const lvl = profile.mechLevel * v.mech * (fp ? 1 : 0.6) * clamp(1 - dist / 14, 0.15, 1);
     const partials = profile.mechPartials;
@@ -261,16 +314,16 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
       { f: partials[0] * rng.range(0.96, 1.05), q: 26, g: 0.5 * lvl, decay: 0.055 },
       { f: partials[1] * rng.range(0.96, 1.05), q: 20, g: 0.34 * lvl, decay: 0.035 },
       { f: partials[2] * rng.range(0.96, 1.05), q: 14, g: 0.2 * lvl, decay: 0.02 },
-    ], 0.0035);
+    ], 0.0035, 'white', out);
     bolt.connect(out);
     // Return-to-battery: a second, softer clack a few ms later.
     const back = struckResonator(actx, bank, rng, t0 + md * 2.1, [
       { f: partials[0] * 0.88, q: 18, g: 0.3 * lvl, decay: 0.04 },
       { f: partials[1] * 1.12, q: 12, g: 0.16 * lvl, decay: 0.022 },
-    ], 0.003);
+    ], 0.003, 'white', out);
     back.connect(out);
     // Spring/gas hiss.
-    const hs = bank.source('white', rng, rng.range(1, 1.4));
+    const hs = bank.source('white', rng, rng.range(1, 1.4), false, out);
     const hbp = biquad(actx, 'bandpass', 4200 * rng.range(0.9, 1.1), 1.4);
     const hg = gain(actx, 0);
     series(hs, hbp, hg).connect(out);
@@ -282,7 +335,7 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
   /* ---- 7. distant rolling boom ---------------------------------- */
   if (far > 0.12) {
     const boomDur = 0.28 + dist * 0.0055;
-    const src = bank.source('brown', rng, rng.range(0.6, 1.0));
+    const src = bank.source('brown', rng, rng.range(0.6, 1.0), false, out);
     const lp = biquad(actx, 'lowpass', 420, 0.8);
     const bg = gain(actx, 0);
     series(src, lp, bg).connect(out);
@@ -291,22 +344,23 @@ export function weaponShot(actx, bank, rng, profile, o = {}) {
     src.start(t0, src._offset, boomDur * 1.4 + 0.05);
     end = Math.max(end, t0 + boomDur * 1.4);
 
-    // Ground/terrain bounce: one discrete slap after the direct sound. This is
-    // the detail that makes long-range fire read as *outdoors*.
-    const bounceT = t0 + clamp(dist * 0.0022, 0.012, 0.12);
-    const b2 = bank.source('pink', rng, rng.range(0.6, 0.9));
-    const blp = biquad(actx, 'lowpass', 900, 0.7);
-    const b2g = gain(actx, 0);
-    series(b2, blp, b2g).connect(out);
-    ad(b2g.gain, bounceT, 0.3 * far, 0.004, 0.12 + dist * 0.001);
-    b2.start(bounceT, b2._offset, 0.4);
+    // Ground bounce: near LOD only — mid already has enough tail character.
+    if (lod >= 2) {
+      const bounceT = t0 + clamp(dist * 0.0022, 0.012, 0.12);
+      const b2 = bank.source('pink', rng, rng.range(0.6, 0.9), false, out);
+      const blp = biquad(actx, 'lowpass', 900, 0.7);
+      const b2g = gain(actx, 0);
+      series(b2, blp, b2g).connect(out);
+      ad(b2g.gain, bounceT, 0.3 * far, 0.004, 0.12 + dist * 0.001);
+      b2.start(bounceT, b2._offset, 0.4);
+    }
   }
 
-  /* ---- shotgun pellet spatter ----------------------------------- */
-  if (profile.pellets && nearP > 0.2) {
+  /* ---- shotgun pellet spatter (near only) ----------------------- */
+  if (lod >= 2 && profile.pellets && nearP > 0.2) {
     for (let i = 0; i < profile.pellets; i++) {
       const pt = t0 + rng.range(0.0004, 0.006);
-      const src = bank.source('white', rng, rng.range(0.9, 1.4));
+      const src = bank.source('white', rng, rng.range(0.9, 1.4), false, out);
       const bp = biquad(actx, 'bandpass', rng.range(2600, 6200), 1.8);
       const g = gain(actx, 0);
       series(src, bp, g).connect(out);
@@ -329,7 +383,7 @@ export function bulletWhizz(actx, bank, rng, o = {}) {
   const miss = clamp(o.miss ?? 1.5, 0.15, 6); // metres from the ear
   const level = clamp(1.1 - miss / 6, 0.1, 1) * (o.gain ?? 1);
   const out = gain(actx, 3.2); // VOICE TRIM
-  const src = bank.source('white', rng, rng.range(0.9, 1.2));
+  const src = bank.source('white', rng, rng.range(0.9, 1.2), false, out);
   const bp = biquad(actx, 'bandpass', 2400, 3.2);
   const g = gain(actx, 0);
   series(src, bp, g).connect(out);
@@ -340,7 +394,7 @@ export function bulletWhizz(actx, bank, rng, o = {}) {
   ad(g.gain, t0, 1.5 * level, 0.004, dur);
   src.start(t0, src._offset, dur * 2);
   // Snap of the shock front.
-  const s2 = bank.source('white', rng, 1.2);
+  const s2 = bank.source('white', rng, 1.2, false, out);
   const hp = biquad(actx, 'highpass', 4000, 0.7);
   const g2 = gain(actx, 0);
   series(s2, hp, g2).connect(out);
@@ -357,7 +411,7 @@ export function dryFire(actx, bank, rng, o = {}) {
     { f: 2600 * rng.range(0.95, 1.05), q: 24, g: 1.2, decay: 0.035 },
     { f: 4700, q: 16, g: 0.66, decay: 0.02 },
     { f: 860, q: 10, g: 0.5, decay: 0.05 },
-  ], 0.0025);
+  ], 0.0025, 'white', out);
   r.connect(out);
   return { node: out, end: t0 + 0.14, send: 0.2 };
 }

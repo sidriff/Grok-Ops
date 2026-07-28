@@ -104,15 +104,16 @@ const GEAR = {
  * dragging every piece of its kit out of the albedo budget.
  */
 export const VARIANTS = {
+  // Hostiles — warm OPFOR read (sand / mud). Never use for player squad.
   vanguard: {
     camo: 'arid',
-    clothTint: [1.03, 1.0, 0.94],
-    gearTint: [1.08, 0.98, 0.80], // coyote brown
-    plateTint: [1.02, 0.96, 0.84],
+    clothTint: [1.18, 0.96, 0.72], // sand / sun-bleached tan
+    gearTint: [1.22, 0.88, 0.58], // rust-coyote
+    plateTint: [1.12, 0.90, 0.68],
     skinTint: [1.0, 0.94, 0.88],
     helmet: true,
     helmetCover: true,
-    helmetTint: [0.72, 0.72, 0.68],
+    helmetTint: [0.78, 0.62, 0.42],
     goggles: true,
     gogglesDown: true,
     faceWrap: true,
@@ -125,9 +126,9 @@ export const VARIANTS = {
   },
   irregular: {
     camo: 'woodland',
-    clothTint: [0.98, 1.02, 0.94],
-    gearTint: [0.92, 0.96, 0.74], // olive drab
-    plateTint: [0.90, 0.94, 0.80],
+    clothTint: [1.02, 0.98, 0.72], // mud-olive
+    gearTint: [1.08, 0.86, 0.52], // brown webbing
+    plateTint: [0.98, 0.88, 0.62],
     skinTint: [0.86, 0.80, 0.74],
     helmet: false,
     headWrap: true,
@@ -143,15 +144,16 @@ export const VARIANTS = {
     bulk: 0.94,
     scale: 0.985,
   },
+  // Friendlies — cool blue-grey operators (player squad only).
   breacher: {
     camo: 'urban',
-    clothTint: [0.98, 0.99, 1.02],
-    gearTint: [0.84, 0.86, 0.90], // wolf grey
-    plateTint: [0.86, 0.88, 0.92],
+    clothTint: [0.82, 0.90, 1.12], // steel / NATO blue-grey
+    gearTint: [0.68, 0.78, 0.98], // cold blue pouches
+    plateTint: [0.72, 0.82, 1.02],
     skinTint: [1.06, 0.98, 0.92],
     helmet: true,
     helmetCover: false, // bare painted shell instead of a cloth cover
-    helmetTint: [0.82, 0.83, 0.86],
+    helmetTint: [0.55, 0.62, 0.78],
     // goggles parked on the shell (not over the eyes like vanguard) plus a hard
     // ballistic half-mask: same helmet family, completely different head read
     goggles: true,

@@ -557,14 +557,27 @@ export class WeaponSystem {
       maxRange: def.maxRange,
       weapon: def,
       tracer: this.stats.fired % def.tracerEvery === 0,
+      // Attribute hits to the local player so AI-on-AI fire (also via
+      // physics.fireBullet) does not credit YOU on the killfeed.
+      source: this.player ?? this.ctx?.peek?.('player') ?? 'player',
     });
 
     // ---- feedback ----
+    // CoD-style climb: pattern pitch/yaw permanently displace aim so a burst
+    // walks the reticle and the player has to pull down. Viewmodel kick is the
+    // gun feel; camera spring is only a short overshoot that returns to the
+    // new aim home (not the climb itself).
     this.viewmodel.addRecoil(pitch, yaw, first);
     const p = this.player;
+    if (p?.addAimClimb) p.addAimClimb(pitch, yaw);
     if (p?.addRecoil) {
-      // The camera climb is the learnable part; the viewmodel kick is the feel.
-      p.addRecoil(pitch, yaw, def.recoil.roll * 0.35, def.recoil.punch);
+      const flinch = 0.22;
+      p.addRecoil(
+        pitch * flinch,
+        yaw * flinch,
+        def.recoil.roll * 0.35,
+        def.recoil.punch
+      );
     }
     this._spread = Math.min(def.spreadMax, this._spread + def.spreadPerShot);
     this._fireTimer = 60 / def.rpm;
@@ -799,8 +812,9 @@ export class WeaponSystem {
       st.trigger = this._sinceShot < 0.09;
     }
 
-    // Push the ADS curve to the player so camera FOV / move speed follow it.
+    // Push the ADS curve + per-weapon zoom to the player (camera FOV / move).
     player?.setAdsProgress?.(this.viewmodel.adsT);
+    player?.setAdsFovScale?.(def?.adsFov ?? null);
 
     this.stats.live = this.sim.stats.live;
     this.stats.fired = this.sim.stats.fired;
@@ -858,6 +872,7 @@ export class WeaponSystem {
       this._firePayload.local = true;
       this._firePayload.firstPerson = true;
       this._firePayload.recoil = this._pendingFirst ? 1.15 : 0.85;
+      this._firePayload.source = this.player ?? ctx.peek?.('player') ?? 'player';
       for (let i = 0; i < this._pendingShots; i++) {
         ctx.events.emit('weapon:fire', this._firePayload);
       }

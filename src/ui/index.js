@@ -14,6 +14,7 @@ import { Prompt, Banner } from './prompts.js';
 import { DeathOverlay } from './death.js';
 import { PauseMenu } from './menu.js';
 import { CombatDemo } from './demo.js';
+import { Nameplate } from './nameplate.js';
 
 const MAX_BLIPS = 48;
 const MAX_PINGS = 32;
@@ -104,7 +105,20 @@ export class UiSystem {
     this.prompt = new Prompt(this.chromeLayer);
     this.banner = new Banner(this.chromeLayer);
     this.death = new DeathOverlay(this.root);
+    this.nameplate = new Nameplate(this.centreLayer);
     this.menu = new PauseMenu(this.root, ctx);
+
+    this.death.onRetry = () => {
+      const game = this.ctx.peek('game');
+      if (typeof game?.restart === 'function') game.restart();
+      else location.reload();
+    };
+    // Full page reload returns to the title shell (boot is one-shot).
+    const retreatToMenu = () => {
+      location.reload();
+    };
+    this.death.onRetreat = retreatToMenu;
+    this.menu.onRetreat = retreatToMenu;
 
     this.health.onBeat = (i) => this.sfx('heartbeat', 0.35 + i * 0.5);
 
@@ -131,12 +145,19 @@ export class UiSystem {
       baseSpread: 5.5,
       scoreUs: 0,
       scoreThem: 0,
-      timeLeft: 600,
-      mode: 'TDM',
+      timeLeft: 300,
+      mode: 'SURVIVE',
       dead: false,
       deathActive: false,
       killerName: '',
       respawnIn: 0,
+      noRespawn: true,
+      endgame: false,
+      won: false,
+      timeSurvived: 0,
+      kills: 0,
+      allyKills: 0,
+      alliesAlive: 0,
       /** true when no player/weapons subsystem is driving us (stub-safe demo) */
       simulate: false,
       time: 0,
@@ -214,10 +235,14 @@ export class UiSystem {
 
     on('damage:dealt', (e) => {
       if (!e) return;
-      // The payload means "damage dealt TO e.target". `ai` uses it for enemy
-      // rounds that connect with the player, which must not draw a hitmarker or
-      // a "YOU killed" killfeed row — that arrives as `damage:taken` below.
+      // The payload means "damage dealt TO e.target". Enemy rounds into the
+      // player must not draw a hitmarker — that arrives as `damage:taken`.
       if (this._isPlayerTarget(e.target)) return;
+      // Only the *local player's* rounds credit hitmarkers / score / YOU rows.
+      // AI-on-AI used to arrive with no source and looked like free kills.
+      if (!this._isPlayerSource(e.source)) return;
+      // Don't celebrate teamkilling a blue.
+      if (e.target?.team === 0 || e.target?.friendly === true) return;
       const kind = e.killed ? 'kill' : e.headshot ? 'head' : e.armour ? 'armour' : 'hit';
       this.hitmarker(kind);
       if (e.point) {
@@ -236,7 +261,8 @@ export class UiSystem {
           mine: true,
         });
         this.banner.show('Enemy Eliminated', e.headshot ? '+150 XP · HEADSHOT' : '+100 XP');
-        this.state.scoreUs++;
+        // scoreUs is owned by the survival director; bump only as fallback.
+        if (!this.ctx.peek('game')) this.state.scoreUs++;
       }
     });
 
@@ -256,11 +282,16 @@ export class UiSystem {
 
     on('actor:death', (e) => {
       if (e?.actor?.isPlayerCorpse) return; // player body is not a combat kill
-      if (ctx.time.elapsed - this._lastKillAt < 0.3) return; // already credited
+      if (ctx.time.elapsed - this._lastKillAt < 0.3) return; // already credited as YOU
+      const by = e?.by;
+      const attackerIsPlayer = this._isPlayerSource(by);
+      if (attackerIsPlayer) return; // handled by damage:dealt kill row
+      const ally = by && typeof by === 'object' && (by.team === 0 || by.friendly);
       this.killfeed.push({
-        attacker: e?.by?.name ?? 'ENEMY',
+        attacker: by?.name ?? (ally ? 'ALLY' : 'ENEMY'),
         victim: e?.actor?.name ?? 'OPERATOR',
-        attackerFriendly: false,
+        // false → red attacker / blue victim (hostile kill). Ally kill flips.
+        attackerFriendly: ally ? true : false,
       });
     });
 
@@ -270,7 +301,6 @@ export class UiSystem {
         victim: 'YOU',
         attackerFriendly: false,
       });
-      this.state.scoreThem = (this.state.scoreThem ?? 0) + 1;
       this.sfx('player_hurt', 1);
     });
 
@@ -306,6 +336,57 @@ export class UiSystem {
   _isPlayerTarget(t) {
     if (!t) return false;
     return t === 'player' || t === this.ctx.peek('player') || t.isPlayer === true;
+  }
+
+  /** True when the local player dealt this damage. */
+  _isPlayerSource(src) {
+    if (!src) return false;
+    if (src === 'player' || src?.isPlayer === true) return true;
+    return src === this.ctx.peek('player');
+  }
+
+  /**
+   * Reticle hover: name + friend/foe colour for the actor under the crosshair.
+   */
+  _updateNameplate(dt, ctx, s) {
+    if (!this.nameplate) return;
+    if (s.deathActive || s.endgame || this.menu?.open) {
+      this.nameplate.update(dt, null);
+      return;
+    }
+    const phys = ctx.peek('physics');
+    const cam = ctx.camera;
+    if (!phys?.raycast || !cam) {
+      this.nameplate.update(dt, null);
+      return;
+    }
+    // Camera look ray.
+    this._tmp.set(0, 0, -1).applyQuaternion(cam.quaternion);
+    const hit = phys.raycast(cam.position, this._tmp, 48, phys.MASK?.BULLET);
+    const actor = hit?.actor ?? hit?.hit?.actor ?? null;
+    if (!actor || actor.isPlayerCorpse || actor.alive === false) {
+      this.nameplate.update(dt, null);
+      return;
+    }
+    // Prefer the Agent on the collider owner.
+    const a = actor.userData?.agent ?? actor;
+    if (!a?.name && !a?.callsign) {
+      this.nameplate.update(dt, null);
+      return;
+    }
+    const friendly = a.friendly === true || a.team === 0;
+    const dist = a.position
+      ? Math.hypot(
+          a.position.x - cam.position.x,
+          a.position.y - cam.position.y,
+          a.position.z - cam.position.z
+        )
+      : null;
+    this.nameplate.update(dt, {
+      name: a.name ?? a.callsign,
+      friendly,
+      dist,
+    });
   }
 
   _playerState() {
@@ -431,6 +512,38 @@ export class UiSystem {
     Object.assign(this.state, m);
   }
 
+  /**
+   * Survival score screen. Pass null to clear (Retry / new match).
+   * @param {object|null} payload
+   */
+  setEndgame(payload) {
+    const s = this.state;
+    if (!payload) {
+      s.endgame = false;
+      s.won = false;
+      s.deathActive = false;
+      s.dead = false;
+      s.killerName = '';
+      s.timeSurvived = 0;
+      s.kills = 0;
+      s.allyKills = 0;
+      s.alliesAlive = 0;
+      return;
+    }
+    s.endgame = true;
+    s.won = !!payload.won;
+    s.killerName = payload.killerName ?? s.killerName ?? 'ENEMY';
+    s.timeSurvived = payload.timeSurvived ?? 0;
+    s.kills = payload.kills ?? 0;
+    s.allyKills = payload.allyKills ?? 0;
+    s.alliesAlive = payload.alliesAlive ?? 0;
+    s.deathActive = true;
+    s.dead = true;
+    s.noRespawn = true;
+    // Belt-and-suspenders with game._endMatch: show a real cursor for Retry.
+    this.ctx.input?.releasePointerForUi?.();
+  }
+
   setHudVisible(v) {
     this.hudTarget = v ? 1 : 0;
   }
@@ -482,10 +595,15 @@ export class UiSystem {
 
     // ---- pause -----------------------------------------------------------
     if (ctx.input.enabled && !ctx.input.frozen) {
-      if (ctx.input.actionPressed('pause')) this.menu.toggle();
+      if (ctx.input.actionPressed('pause') && !s.endgame) this.menu.toggle();
       // Losing pointer lock mid-match is the same intent as pressing Escape.
-      if (ctx.input.pointerLocked) this._hadPointerLock = true;
-      else if (this._hadPointerLock && !this.menu.open) {
+      // Score screen intentionally releases lock for Retry — don't treat that
+      // as "pause".
+      if (s.endgame) {
+        this._hadPointerLock = false;
+      } else if (ctx.input.pointerLocked) {
+        this._hadPointerLock = true;
+      } else if (this._hadPointerLock && !this.menu.open) {
         this._hadPointerLock = false;
         this.menu.show();
       }
@@ -599,6 +717,7 @@ export class UiSystem {
     this.prompt.update(dt);
     this.banner.update(dt);
     this.death.update(rawDt, s);
+    this._updateNameplate(dt, ctx, s);
 
     this._buildCompassObjectives(pos);
     this.compass.update(heading, this._compassObjs);
@@ -827,6 +946,7 @@ export class UiSystem {
     this.prompt.dispose();
     this.banner.dispose();
     this.death.dispose();
+    this.nameplate?.dispose?.();
     this.menu.dispose();
     this.root.remove();
     removeStyles();

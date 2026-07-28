@@ -4,6 +4,10 @@
  *
  * Edge queries (`pressed`, `released`) are valid only during the frame in which
  * the transition happened — read them in update(), not fixedUpdate().
+ *
+ * Crouch is Ctrl. Chrome reserves Ctrl+W / Ctrl+T / Ctrl+N for the browser and
+ * ignores preventDefault on them. Keyboard Lock only works in fullscreen; the
+ * boot "Fullscreen" checkbox sets `wantFullscreen` so Deploy can opt into that.
  */
 
 export const ACTIONS = {
@@ -25,6 +29,36 @@ export const ACTIONS = {
   flashlight: ['KeyT'],
   pause: ['Escape'],
 };
+
+/** Codes that conflict with browser chrome when Ctrl/Meta is held (crouch). */
+const KEYBOARD_LOCK_CODES = [
+  'KeyW',
+  'KeyA',
+  'KeyS',
+  'KeyD',
+  'KeyR',
+  'KeyT',
+  'KeyQ',
+  'KeyE',
+  'KeyF',
+  'KeyG',
+  'KeyC',
+  'KeyV',
+  'KeyZ',
+  'KeyN',
+  'Digit1',
+  'Digit2',
+  'Digit3',
+  'Digit4',
+  'Digit5',
+  'Tab',
+  'Space',
+  'Escape',
+  'ControlLeft',
+  'ControlRight',
+  'ShiftLeft',
+  'ShiftRight',
+];
 
 export class Input {
   constructor(canvas, config) {
@@ -52,6 +86,14 @@ export class Input {
      * the system cursor free so DOM buttons remain clickable.
      */
     this.wantPointerLock = true;
+    /**
+     * When true, Deploy/resume requests fullscreen so keyboard.lock can stop
+     * Ctrl+W from closing the tab. Driven by the boot Fullscreen checkbox.
+     */
+    this.wantFullscreen = true;
+    /** True after a successful navigator.keyboard.lock while in play. */
+    this._keysLocked = false;
+    this._claimGen = 0;
 
     this.gamepadIndex = null;
     this.stick = { moveX: 0, moveY: 0, lookX: 0, lookY: 0 };
@@ -64,32 +106,38 @@ export class Input {
       mousemove: this._onMouseMove.bind(this),
       wheel: this._onWheel.bind(this),
       lockchange: this._onLockChange.bind(this),
+      fullscreen: this._onFullscreenChange.bind(this),
       blur: this._onBlur.bind(this),
       contextmenu: (e) => e.preventDefault(),
     };
   }
 
   attach() {
-    addEventListener('keydown', this._bound.keydown);
-    addEventListener('keyup', this._bound.keyup);
+    // Capture phase so we can preventDefault before other handlers; still not
+    // enough alone for Chrome's reserved Ctrl+W — see _claimExclusiveInput.
+    addEventListener('keydown', this._bound.keydown, true);
+    addEventListener('keyup', this._bound.keyup, true);
     addEventListener('mousedown', this._bound.mousedown);
     addEventListener('mouseup', this._bound.mouseup);
     addEventListener('mousemove', this._bound.mousemove);
     addEventListener('wheel', this._bound.wheel, { passive: true });
     addEventListener('blur', this._bound.blur);
     document.addEventListener('pointerlockchange', this._bound.lockchange);
+    document.addEventListener('fullscreenchange', this._bound.fullscreen);
     this.canvas.addEventListener('contextmenu', this._bound.contextmenu);
   }
 
   detach() {
-    removeEventListener('keydown', this._bound.keydown);
-    removeEventListener('keyup', this._bound.keyup);
+    this._releaseExclusiveInput({ exitFullscreen: true });
+    removeEventListener('keydown', this._bound.keydown, true);
+    removeEventListener('keyup', this._bound.keyup, true);
     removeEventListener('mousedown', this._bound.mousedown);
     removeEventListener('mouseup', this._bound.mouseup);
     removeEventListener('mousemove', this._bound.mousemove);
     removeEventListener('wheel', this._bound.wheel);
     removeEventListener('blur', this._bound.blur);
     document.removeEventListener('pointerlockchange', this._bound.lockchange);
+    document.removeEventListener('fullscreenchange', this._bound.fullscreen);
     this.canvas.removeEventListener('contextmenu', this._bound.contextmenu);
   }
 
@@ -107,37 +155,144 @@ export class Input {
     }
   }
 
+  /** Force a visible OS cursor (boot / pause / endgame). */
+  _showUiCursor() {
+    // #game CSS is `cursor: none` for FPS aim — override while menus own the mouse.
+    if (this.canvas) this.canvas.style.cursor = 'default';
+    document.body.style.cursor = 'default';
+    document.documentElement.style.cursor = 'default';
+  }
+
+  /** Drop UI cursor overrides so #game can hide the cursor under pointer lock. */
+  _hideUiCursor() {
+    if (this.canvas) this.canvas.style.cursor = '';
+    document.body.style.cursor = '';
+    document.documentElement.style.cursor = '';
+  }
+
   /** Release lock and restore a normal OS cursor for DOM menus. */
   releasePointerForUi() {
     this.wantPointerLock = false;
+    // Keep browser fullscreen if the user opted in; only free keyboard lock + pointer.
+    this._releaseExclusiveInput({ exitFullscreen: false });
     try {
       document.exitPointerLock?.();
     } catch {
       /* already free */
     }
-    // #game is `cursor: none` for FPS aim; flip it while menus own the mouse.
-    if (this.canvas) this.canvas.style.cursor = 'default';
-    document.body.style.cursor = 'default';
+    this._showUiCursor();
   }
 
-  /** Return to FPS aim: hide cursor, allow auto-lock, optionally re-lock. */
+  /**
+   * Enter fullscreen (if the Fullscreen checkbox is on) without pointer-lock
+   * or hiding the cursor. Call from a user gesture (Deploy / Resume click) so
+   * the load menu can stay interactive while the page goes fullscreen.
+   */
+  async prepareGameSurface() {
+    const gen = ++this._claimGen;
+    if (!this.wantFullscreen) return;
+    try {
+      if (!document.fullscreenElement) {
+        const root = document.documentElement;
+        const req =
+          root.requestFullscreen?.({ navigationUI: 'hide' }) ?? root.requestFullscreen?.();
+        if (req && typeof req.then === 'function') await req;
+      }
+    } catch {
+      /* denied / unsupported */
+    }
+    // Cursor stays visible — caller still has the menu up.
+    if (gen === this._claimGen && !this.wantPointerLock) this._showUiCursor();
+  }
+
+  /**
+   * Return to FPS aim: keyboard-lock (if fullscreen), hide cursor, pointer-lock.
+   * Call only after the load/pause shell is gone — pointer lock hides the OS
+   * cursor even when the menu is still fading out.
+   */
   capturePointerForGame({ lock = true } = {}) {
     this.wantPointerLock = true;
-    if (this.canvas) this.canvas.style.cursor = '';
-    document.body.style.cursor = '';
-    if (lock) this.requestPointerLock();
+    // Fullscreen + keyboard.lock must ride a user gesture (Deploy / Resume /
+    // click-to-recapture). Without it, Ctrl+crouch + W closes the tab.
+    void this._claimExclusiveInput().then(() => {
+      if (!this.wantPointerLock) return;
+      if (lock) {
+        this._hideUiCursor();
+        this.requestPointerLock();
+      }
+    });
+  }
+
+  /**
+   * Optionally enter fullscreen, then keyboard-lock action keys so Ctrl+WASD
+   * is delivered to the page instead of the browser. Fullscreen is gated by
+   * `wantFullscreen` (boot checkbox). Safe to call often.
+   */
+  async _claimExclusiveInput() {
+    if (!this.wantPointerLock) return;
+    const gen = ++this._claimGen;
+
+    if (this.wantFullscreen) {
+      try {
+        if (!document.fullscreenElement) {
+          const root = document.documentElement;
+          const req =
+            root.requestFullscreen?.({ navigationUI: 'hide' }) ?? root.requestFullscreen?.();
+          if (req && typeof req.then === 'function') await req;
+        }
+      } catch {
+        /* denied / unsupported — keyboard.lock will likely fail too */
+      }
+    }
+    if (gen !== this._claimGen || !this.wantPointerLock) return;
+
+    // Chromium only honors lock for reserved shortcuts while fullscreen.
+    if (!document.fullscreenElement) return;
+
+    try {
+      const kb = navigator.keyboard;
+      if (kb && typeof kb.lock === 'function') {
+        await kb.lock(KEYBOARD_LOCK_CODES);
+        if (gen === this._claimGen && this.wantPointerLock) this._keysLocked = true;
+      }
+    } catch {
+      this._keysLocked = false;
+    }
+  }
+
+  _releaseExclusiveInput({ exitFullscreen = false } = {}) {
+    this._claimGen++;
+    if (this._keysLocked) {
+      try {
+        navigator.keyboard?.unlock?.();
+      } catch {
+        /* ignore */
+      }
+      this._keysLocked = false;
+    }
+    if (exitFullscreen && document.fullscreenElement) {
+      try {
+        document.exitFullscreen?.();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   _onKeyDown(e) {
     if (!this.enabled) return;
+    // Always try to swallow game keys while we own input. Chrome still ignores
+    // this for reserved combos (Ctrl+W) unless keyboard.lock is active.
+    if (this.wantPointerLock || this.pointerLocked || (!e.metaKey && !e.ctrlKey)) {
+      e.preventDefault();
+    }
     if (e.repeat) return;
-    // Let devtools/refresh through; swallow everything else the game binds.
-    if (!e.metaKey && !e.ctrlKey) e.preventDefault();
     this._pendingDown.add(e.code);
   }
 
   _onKeyUp(e) {
     if (!this.enabled) return;
+    if (this.wantPointerLock || this.pointerLocked) e.preventDefault();
     this._pendingUp.add(e.code);
   }
 
@@ -145,7 +300,10 @@ export class Input {
     if (!this.enabled) return;
     // Menus own the mouse — don't re-lock mid-click or swallow button presses.
     if (!this.wantPointerLock) return;
-    if (!this.pointerLocked && e.button === 0) this.requestPointerLock();
+    if (!this.pointerLocked && e.button === 0) {
+      // Click-to-recapture is a fresh user gesture — re-claim + lock aim.
+      this.capturePointerForGame({ lock: true });
+    }
     this._pendingDown.add(`Mouse${e.button}`);
   }
 
@@ -168,7 +326,25 @@ export class Input {
 
   _onLockChange() {
     this.pointerLocked = document.pointerLockElement === this.canvas;
-    if (!this.pointerLocked) this._onBlur();
+    if (!this.pointerLocked) {
+      this._onBlur();
+      // Esc released pointer lock but menu may still want a visible cursor.
+      if (!this.wantPointerLock) this._showUiCursor();
+    } else if (this.wantPointerLock && !this._keysLocked) {
+      void this._claimExclusiveInput();
+    }
+  }
+
+  _onFullscreenChange() {
+    if (document.fullscreenElement && this.wantPointerLock && !this._keysLocked) {
+      void this._claimExclusiveInput();
+    }
+    if (!document.fullscreenElement && this._keysLocked) {
+      // User left fullscreen (Esc hold / F11) — reserved shortcuts work again.
+      this._releaseExclusiveInput({ exitFullscreen: false });
+    }
+    // Fullscreening the page while the title shell is up must keep the cursor.
+    if (!this.wantPointerLock) this._showUiCursor();
   }
 
   /** Losing focus must release every held key, or the player runs forever. */

@@ -2,10 +2,11 @@
  * Boot / title shell controller — also the in-game pause menu.
  *
  * Markup + CSS live in index.html for first paint. One layout from the start:
- *   graphics · progress · controls · settings · single CTA
+ *   progress · graphics (pre-Load) or weapons (post-Load) · controls · settings · CTA
  *
  * CTA modes: Load → Loading… → Deploy → (in-game) Resume
- * Graphics lock after Load. Look prefs apply live once `bindConfig` is called.
+ * After Load, graphics cards swap for the weapons briefing (incl. grenade).
+ * Pause keeps weapons up. Look prefs apply live once `bindConfig` is called.
  *
  * Menu audio (procedural clicks + sparse loop) starts on title load so a cold
  * boot proves the app has sound — no sample assets.
@@ -87,6 +88,8 @@ export class LoadScreen {
   constructor(root = document.getElementById('boot')) {
     this.root = root;
     this.blurbEl = root?.querySelector('#boot-blurb') ?? null;
+    this.graphicsBlock = root?.querySelector('#boot-graphics-block') ?? null;
+    this.weaponsBlock = root?.querySelector('#boot-weapons-block') ?? null;
     this.qualityHost = root?.querySelector('#boot-quality') ?? null;
     this.qLabel = root?.querySelector('#boot-q-label') ?? null;
     this.qWarn = root?.querySelector('#boot-q-warn') ?? null;
@@ -98,6 +101,8 @@ export class LoadScreen {
     this.hintEl = root?.querySelector('#boot-hint') ?? null;
     this.deployBtn = root?.querySelector('#boot-deploy') ?? null;
     this.deployLabel = root?.querySelector('.boot-deploy-label') ?? null;
+    this.fullscreenInput = root?.querySelector('#boot-fullscreen') ?? null;
+    this.retreatBtn = root?.querySelector('#boot-retreat') ?? null;
     this.sensInput = root?.querySelector('#boot-sens') ?? null;
     this.sensVal = root?.querySelector('#boot-sens-val') ?? null;
     this.fovInput = root?.querySelector('#boot-fov') ?? null;
@@ -119,8 +124,10 @@ export class LoadScreen {
     this._loadResolvers = [];
     this._deployResolvers = [];
     this._resumeHandler = null;
+    this._retreatHandler = null;
     this._config = null;
     this._camera = null;
+    this._input = null;
     this._qCards = [];
     this._hideTimer = 0;
     this._menuAudio = new MenuAudio();
@@ -133,11 +140,14 @@ export class LoadScreen {
       fov: clampNum(saved.fov, 65, 120, 80),
       invertY: !!saved.invertY,
       masterVol: clampNum(saved.masterVol, 0, 1, 0.95),
+      // Default on: fullscreen is what lets Ctrl-crouch survive Ctrl+W in Chrome.
+      fullscreen: saved.fullscreen !== false,
       quality: PRESETS.includes(saved.quality) ? saved.quality : null,
     };
     this._menuAudio.setVolume(this.prefs.masterVol);
 
     this._onCtaClick = () => this._resolveCta();
+    this._onRetreatClick = () => this._resolveRetreat();
     this._onKey = (e) => {
       if (this._dismissed) return;
       if (e.code !== 'Enter' && e.code !== 'Space') return;
@@ -148,10 +158,20 @@ export class LoadScreen {
     };
 
     if (this.deployBtn) this.deployBtn.addEventListener('click', this._onCtaClick);
+    if (this.retreatBtn) this.retreatBtn.addEventListener('click', this._onRetreatClick);
     addEventListener('keydown', this._onKey);
 
     this._bindLookControls();
+    this._bindFullscreenToggle();
     this._setActionButton('load');
+
+    // Quality cards live in index.html for first paint; hydrate + select now so
+    // the briefing is interactive as soon as this module runs (not only after
+    // waitForBriefing, and never after the player has already clicked Load).
+    this._selectedQuality = this.prefs.quality || this._selectedQuality;
+    this._buildQualityCards();
+    this._syncQualityUi();
+    this._syncLookUi();
 
     // Start the briefing bed ASAP so a cold load proves the app has sound.
     if (this.root && !this.root.classList.contains('boot-hidden')) {
@@ -197,6 +217,14 @@ export class LoadScreen {
   }
 
   /**
+   * PauseMenu wires this so Retreat returns to the title shell.
+   * @param {null | (() => void)} fn
+   */
+  setRetreatHandler(fn) {
+    this._retreatHandler = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
    * Show shell, wait for Load. Returns chosen quality + look prefs.
    * @param {{ recommended?: string, forced?: string|null, gpuLabel?: string }} opts
    */
@@ -217,7 +245,7 @@ export class LoadScreen {
       this.prefs.quality ||
       this._recommended;
 
-    this._buildQualityCards({ locked: false });
+    this._buildQualityCards();
     this._syncQualityUi();
     this._syncLookUi();
     this._setLiveQuality();
@@ -237,6 +265,7 @@ export class LoadScreen {
     }
     if (this.metaEl) this.metaEl.textContent = '';
     if (this.blurbEl) this.blurbEl.hidden = false;
+    this._setPanelMode('graphics');
 
     this.root.classList.remove('boot-ready', 'boot-hidden', 'boot-gone');
     this.deployBtn?.focus?.({ preventScroll: true });
@@ -268,12 +297,12 @@ export class LoadScreen {
     this._setLiveQuality();
     this._setWarn('');
     this._setActionButton('loading');
+    this._setPanelMode('weapons');
 
     if (this.fillEl) this.fillEl.style.width = '0%';
     if (this.pctEl) this.pctEl.textContent = '0%';
     if (this.labelEl) this.labelEl.textContent = 'Loading…';
     if (this.hintEl) this.hintEl.textContent = 'Building the AO';
-    if (this.qLabel) this.qLabel.textContent = 'Graphics (locked)';
     if (this.kickerEl) this.kickerEl.textContent = 'Operator Briefing';
     if (meta != null) this.setMeta(meta);
     this.root.classList.remove('boot-ready');
@@ -300,6 +329,15 @@ export class LoadScreen {
     }
     this._syncLookUi();
     this._applyLookToConfig();
+  }
+
+  /**
+   * Wire Input so the Fullscreen checkbox controls keyboard-lock on Deploy.
+   * @param {import('./input.js').Input | null} input
+   */
+  bindInput(input) {
+    this._input = input || null;
+    this._applyFullscreenToInput();
   }
 
   /**
@@ -338,6 +376,7 @@ export class LoadScreen {
     this._progress = 1;
     this._phase = 'ready';
     this._showShell({ ready: true });
+    this._setPanelMode('weapons');
     if (this.fillEl) this.fillEl.style.width = '100%';
     if (this.pctEl) this.pctEl.textContent = '100%';
     if (this.labelEl) this.labelEl.textContent = 'Ready';
@@ -358,14 +397,18 @@ export class LoadScreen {
 
   /**
    * Hide the shell and mark match as live. Shell stays alive for pause.
+   * Resolves when the shell is fully gone so callers can pointer-lock without
+   * hiding the cursor over a still-visible menu.
    * @param {{ immediate?: boolean }} [opts]
+   * @returns {Promise<void>}
    */
   enterPlaying({ immediate = false } = {}) {
     this._inGame = true;
     this._ready = true;
     this._phase = 'playing';
+    this.root?.classList.remove('boot-paused');
     this._menuAudio.stopMusic();
-    this._hideShell({ immediate });
+    return this._hideShell({ immediate });
   }
 
   /** Open the shell as the pause / settings menu (Resume CTA). */
@@ -375,7 +418,7 @@ export class LoadScreen {
     this._ready = true;
     this._phase = 'paused';
     this._qualityLocked = true;
-    if (!this._qCards.length) this._buildQualityCards({ locked: true });
+    if (!this._qCards.length) this._buildQualityCards();
     this._syncLookFromConfig();
     this._syncLookUi();
     this._syncQualityUi();
@@ -383,17 +426,18 @@ export class LoadScreen {
     this._setWarn('');
 
     if (this.blurbEl) this.blurbEl.hidden = true;
+    this._setPanelMode('weapons');
     if (this.fillEl) this.fillEl.style.width = '100%';
     if (this.pctEl) this.pctEl.textContent = '100%';
     if (this.labelEl) this.labelEl.textContent = 'Paused';
-    if (this.hintEl) this.hintEl.textContent = 'Esc · Enter · Space · Click Resume';
+    if (this.hintEl) this.hintEl.textContent = 'Esc · Enter · Space · Resume · Retreat → menu';
     if (this.kickerEl) this.kickerEl.textContent = 'Paused';
-    if (this.qLabel) this.qLabel.textContent = 'Graphics (locked)';
     if (meta != null) this.setMeta(meta);
     else if (this._selectedQuality) {
       this.setMeta(`${this._selectedQuality.toUpperCase()} · graphics locked`);
     }
 
+    this.root.classList.add('boot-paused');
     this._showShell({ ready: true });
     this._setActionButton('resume');
     this.deployBtn?.focus?.({ preventScroll: true });
@@ -401,16 +445,21 @@ export class LoadScreen {
     this._menuAudio.startMusic();
   }
 
-  /** Hide the pause shell without killing the controller. */
+  /**
+   * Hide the pause shell without killing the controller.
+   * @param {{ immediate?: boolean }} [opts]
+   * @returns {Promise<void>}
+   */
   hidePause({ immediate = false } = {}) {
     if (this._phase !== 'paused' && this._phase !== 'ready') {
       if (this._inGame) this._phase = 'playing';
-      return;
+      return Promise.resolve();
     }
     this._phase = 'playing';
     this._inGame = true;
+    this.root?.classList.remove('boot-paused');
     this._menuAudio.stopMusic();
-    this._hideShell({ immediate });
+    return this._hideShell({ immediate });
   }
 
   /**
@@ -440,6 +489,8 @@ export class LoadScreen {
     this._flushDeploy();
     removeEventListener('keydown', this._onKey);
     if (this.deployBtn) this.deployBtn.removeEventListener('click', this._onCtaClick);
+    if (this.retreatBtn) this.retreatBtn.removeEventListener('click', this._onRetreatClick);
+    this.root?.classList.remove('boot-paused');
     this._menuAudio.stopMusic({ immediate: true });
     this._menuAudio.dispose();
     this._hideShell({ immediate });
@@ -486,6 +537,25 @@ export class LoadScreen {
   }
 
   /**
+   * Pre-Load: graphics cards. Post-Load + pause: weapons briefing.
+   * Both panels stay laid out (stacked) so the shell does not jump on swap.
+   * @param {'graphics' | 'weapons'} mode
+   */
+  _setPanelMode(mode) {
+    const weapons = mode === 'weapons';
+    if (this.graphicsBlock) {
+      this.graphicsBlock.classList.toggle('is-off', weapons);
+      this.graphicsBlock.setAttribute('aria-hidden', weapons ? 'true' : 'false');
+      if (this.graphicsBlock.hidden) this.graphicsBlock.hidden = false;
+    }
+    if (this.weaponsBlock) {
+      this.weaponsBlock.classList.toggle('is-off', !weapons);
+      this.weaponsBlock.setAttribute('aria-hidden', weapons ? 'false' : 'true');
+      if (this.weaponsBlock.hidden) this.weaponsBlock.hidden = false;
+    }
+  }
+
+  /**
    * @param {'load' | 'loading' | 'deploy' | 'resume'} mode
    */
   _setActionButton(mode) {
@@ -515,10 +585,21 @@ export class LoadScreen {
     }
     this.root.classList.remove('boot-hidden', 'boot-gone');
     this.root.classList.toggle('boot-ready', !!ready);
+    // Shell is interactive again — never leave the FPS `cursor: none` active.
+    this._input?.releasePointerForUi?.();
+    if (this._input) this._input._showUiCursor?.();
+    else {
+      document.body.style.cursor = 'default';
+      document.documentElement.style.cursor = 'default';
+    }
   }
 
+  /**
+   * @param {{ immediate?: boolean }} [opts]
+   * @returns {Promise<void>}
+   */
   _hideShell({ immediate = false } = {}) {
-    if (!this.root) return;
+    if (!this.root) return Promise.resolve();
     if (this._hideTimer) {
       clearTimeout(this._hideTimer);
       this._hideTimer = 0;
@@ -526,48 +607,81 @@ export class LoadScreen {
     if (immediate) {
       this.root.classList.add('boot-hidden');
       this.root.classList.remove('boot-gone', 'boot-ready');
-      return;
+      return Promise.resolve();
     }
+    // Already fully hidden — nothing to wait on.
+    if (this.root.classList.contains('boot-hidden')) return Promise.resolve();
+
     this.root.classList.add('boot-gone');
     const root = this.root;
-    const done = () => {
-      root.classList.add('boot-hidden');
-      root.classList.remove('boot-gone', 'boot-ready');
-      root.removeEventListener('transitionend', done);
-      if (this._hideTimer) {
-        clearTimeout(this._hideTimer);
-        this._hideTimer = 0;
-      }
-    };
-    root.addEventListener('transitionend', done);
-    this._hideTimer = setTimeout(done, 700);
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        root.classList.add('boot-hidden');
+        root.classList.remove('boot-gone', 'boot-ready');
+        root.removeEventListener('transitionend', onEnd);
+        if (this._hideTimer) {
+          clearTimeout(this._hideTimer);
+          this._hideTimer = 0;
+        }
+        resolve();
+      };
+      const onEnd = (e) => {
+        // Only the shell opacity transition, not nested element transitions.
+        if (e.target !== root || (e.propertyName && e.propertyName !== 'opacity')) return;
+        done();
+      };
+      root.addEventListener('transitionend', onEnd);
+      this._hideTimer = setTimeout(done, 700);
+    });
   }
 
-  _buildQualityCards({ locked }) {
+  /**
+   * Wire the graphics tier cards. Prefers static markup in index.html so the
+   * options paint on first frame; falls back to building them if the host is empty.
+   */
+  _buildQualityCards() {
     const host = this.qualityHost;
     if (!host) return;
-    host.replaceChildren();
+
+    let buttons = [...host.querySelectorAll('.boot-q-card[data-quality]')];
+    if (!buttons.length) {
+      for (const name of PRESETS) {
+        const blurb = QUALITY_BLURBS[name];
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'boot-q-card';
+        btn.dataset.quality = name;
+        btn.setAttribute('role', 'radio');
+        btn.innerHTML =
+          `<div class="boot-q-name"><span>${name}</span>` +
+          `<span class="boot-q-tag">${blurb?.tag ?? ''}</span></div>` +
+          `<div class="boot-q-desc">${blurb?.desc ?? ''}</div>`;
+        host.appendChild(btn);
+      }
+      buttons = [...host.querySelectorAll('.boot-q-card[data-quality]')];
+    }
+
     this._qCards.length = 0;
-    for (const name of PRESETS) {
-      const blurb = QUALITY_BLURBS[name];
-      const btn = document.createElement('button');
+    for (const btn of buttons) {
+      const name = btn.dataset.quality;
+      if (!PRESETS.includes(name)) continue;
       btn.type = 'button';
-      btn.className = 'boot-q-card';
-      btn.dataset.quality = name;
       btn.setAttribute('role', 'radio');
-      btn.innerHTML =
-        `<div class="boot-q-name"><span>${name}</span>` +
-        `<span class="boot-q-tag">${blurb?.tag ?? ''}</span></div>` +
-        `<div class="boot-q-desc">${blurb?.desc ?? ''}</div>`;
-      btn.addEventListener('click', () => this._onQualityClick(name, locked));
-      host.appendChild(btn);
+      if (!btn.dataset.bound) {
+        btn.dataset.bound = '1';
+        // Read lock live from `this._qualityLocked` — never close over a build-time flag.
+        btn.addEventListener('click', () => this._onQualityClick(name));
+      }
       this._qCards.push(btn);
     }
   }
 
-  _onQualityClick(name, locked) {
+  _onQualityClick(name) {
     if (this._dismissed) return;
-    if (locked || this._qualityLocked) {
+    if (this._qualityLocked) {
       if (name !== this._selectedQuality) {
         this._setWarn('Reload to change graphics');
         this._sfx('click', 0.7);
@@ -602,6 +716,30 @@ export class LoadScreen {
 
   _setWarn(text) {
     if (this.qWarn) this.qWarn.textContent = text || '';
+  }
+
+  _bindFullscreenToggle() {
+    if (!this.fullscreenInput) return;
+    this.fullscreenInput.checked = !!this.prefs.fullscreen;
+    this.fullscreenInput.addEventListener('change', () => {
+      this.prefs.fullscreen = !!this.fullscreenInput.checked;
+      this._persistPrefs();
+      this._applyFullscreenToInput();
+      // Leaving fullscreen from the pause shell so the next Resume stays windowed.
+      if (!this.prefs.fullscreen && document.fullscreenElement) {
+        try {
+          document.exitFullscreen?.();
+        } catch {
+          /* ignore */
+        }
+      }
+      this._sfx('tick', 0.55);
+    });
+  }
+
+  _applyFullscreenToInput() {
+    if (this.fullscreenInput) this.prefs.fullscreen = !!this.fullscreenInput.checked;
+    if (this._input) this._input.wantFullscreen = !!this.prefs.fullscreen;
   }
 
   _bindLookControls() {
@@ -682,6 +820,7 @@ export class LoadScreen {
     if (this.fovVal) this.fovVal.textContent = String(this.prefs.fov | 0);
     if (this.volInput) this.volInput.value = String(this.prefs.masterVol);
     if (this.volVal) this.volVal.textContent = `${Math.round(this.prefs.masterVol * 100)}%`;
+    if (this.fullscreenInput) this.fullscreenInput.checked = !!this.prefs.fullscreen;
     if (this.invertHost) {
       for (const b of this.invertHost.querySelectorAll('button[data-inv]')) {
         b.classList.toggle('is-on', (b.dataset.inv === '1') === !!this.prefs.invertY);
@@ -708,6 +847,7 @@ export class LoadScreen {
       fov: this.prefs.fov,
       invertY: this.prefs.invertY,
       masterVol: this.prefs.masterVol,
+      fullscreen: !!this.prefs.fullscreen,
       quality: this.prefs.quality ?? this._selectedQuality,
     });
   }
@@ -720,16 +860,35 @@ export class LoadScreen {
       return;
     }
     if (this._phase === 'paused') {
+      this._applyFullscreenToInput();
+      // Fullscreen on the Resume click (user gesture) while the shell still
+      // has a visible cursor; pointer-lock waits until the shell is gone.
+      void this._input?.prepareGameSurface?.();
       this._sfx('confirm', 0.85);
       if (this._resumeHandler) this._resumeHandler();
-      else this.hidePause();
+      else void this.hidePause();
       return;
     }
     if (this._phase === 'ready' && this._ready) {
+      this._applyFullscreenToInput();
+      // Fullscreen now if opted in — keep the menu cursor until main finishes
+      // hiding the shell, then capturePointerForGame locks aim.
+      void this._input?.prepareGameSurface?.();
       this._sfx('confirm');
       this._flushDeploy();
-      this.enterPlaying({ immediate: false });
+      // enterPlaying is awaited in main before pointer-lock.
     }
+  }
+
+  _resolveRetreat() {
+    if (this._dismissed) return;
+    if (this._phase !== 'paused') return;
+    this._sfx('confirm', 0.7);
+    if (typeof this._retreatHandler === 'function') {
+      this._retreatHandler();
+      return;
+    }
+    location.reload();
   }
 
   _flushLoad() {

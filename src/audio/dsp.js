@@ -104,8 +104,11 @@ export class NoiseBank {
     }
   }
 
-  /** A one-shot source reading from a random offset. Caller starts/stops it. */
-  source(kind, rng, rate = 1, loop = false) {
+  /**
+   * A one-shot source reading from a random offset. Caller starts/stops it.
+   * Pass `trackRoot` (voice top gain) so steal/teardown can hard-stop the source.
+   */
+  source(kind, rng, rate = 1, loop = false, trackRoot = null) {
     const src = this.actx.createBufferSource();
     const buf = this.buffers[kind] ?? this.buffers.white;
     src.buffer = buf;
@@ -116,6 +119,7 @@ export class NoiseBank {
       src.loopEnd = buf.duration;
     }
     src._offset = rng ? rng.range(0, buf.duration * 0.7) : 0;
+    if (trackRoot) trackSource(trackRoot, src);
     return src;
   }
 
@@ -210,6 +214,44 @@ export function osc(actx, type, freq, detune = 0) {
   return o;
 }
 
+/**
+ * Register a BufferSource / Oscillator on a voice root so steal/teardown can
+ * hard-stop it. Disconnect alone leaves scheduled sources rendering silence.
+ */
+export function trackSource(root, src) {
+  if (root && src) (root._srcs ??= []).push(src);
+  return src;
+}
+
+/**
+ * Stop every tracked source on a voice tree and disconnect the root. Safe to
+ * call twice; used when a voice is stolen or its slot is reclaimed.
+ */
+export function killVoice(root) {
+  if (!root) return;
+  const kids = root._kids;
+  if (kids) {
+    for (let i = 0; i < kids.length; i++) killVoice(kids[i]);
+    root._kids = null;
+  }
+  const srcs = root._srcs;
+  if (srcs) {
+    for (let i = 0; i < srcs.length; i++) {
+      const s = srcs[i];
+      try { s.stop(0); } catch { /* already stopped or not started */ }
+      try { s.disconnect(); } catch { /* noop */ }
+    }
+    root._srcs = null;
+  }
+  try { root.disconnect(); } catch { /* noop */ }
+}
+
+/** Nest a sub-voice (e.g. struckResonator out) so killVoice walks it. */
+export function attachVoice(parent, child) {
+  if (parent && child) (parent._kids ??= []).push(child);
+  return child;
+}
+
 /** Connect a list of nodes head-to-tail; returns the last one. */
 export function series(...nodes) {
   for (let i = 0; i < nodes.length - 1; i++) nodes[i].connect(nodes[i + 1]);
@@ -279,9 +321,11 @@ export function shaper(actx, curve, oversample = '2x') {
  * convincing model of a struck metal/glass/wood object. Returns the sum node.
  * `partials` = [{ f, q, g, decay }]
  */
-export function struckResonator(actx, bank, rng, t0, partials, exciteDur = 0.004, exciteKind = 'white') {
+export function struckResonator(actx, bank, rng, t0, partials, exciteDur = 0.004, exciteKind = 'white', trackRoot = null) {
   const out = gain(actx, 1);
-  const src = bank.source(exciteKind, rng, rng.range(0.85, 1.2));
+  // Track on the parent voice root when provided so killVoice(parent) stops us.
+  const root = trackRoot || out;
+  const src = bank.source(exciteKind, rng, rng.range(0.85, 1.2), false, root);
   const exc = gain(actx, 0);
   hit(exc.gain, t0, 1, exciteDur);
   src.connect(exc);
@@ -298,6 +342,7 @@ export function struckResonator(actx, bank, rng, t0, partials, exciteDur = 0.004
     vg.connect(out);
   }
   src.start(t0, src._offset, exciteDur + 0.02);
+  if (trackRoot) attachVoice(trackRoot, out);
   return out;
 }
 

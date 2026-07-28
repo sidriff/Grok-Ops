@@ -23,9 +23,16 @@ that tier. Force a tier with `?q=low|medium|high|ultra`. Capture mode
 
 ## North star
 
-1. **Actually fun for five minutes** — one clear combat loop.
+1. **Actually fun for five minutes** — survival with 3 allies vs wave spawns.
 2. **Stable frame time and audio** — no hang-and-glitch firefights.
 3. **Honest scope** — browser FPS craft, not AAA cosplay.
+
+## Mode
+
+**Survival** (default): you + three blue operators. Red hostiles spawn up to 12 at a
+time for 5:00. Difficulty is soft early (wide AI cone of fire), bends hard around
+1:00, then refills almost as fast as they drop. Die once → death cam + score +
+**Retry**. Hold the clock → mission complete.
 
 ## Upstream
 

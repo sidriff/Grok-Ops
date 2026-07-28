@@ -29,7 +29,7 @@
  * picked up as well.
  */
 
-import { NoiseBank, SPEED_OF_SOUND, clamp, gain as mkGain } from './dsp.js';
+import { NoiseBank, SPEED_OF_SOUND, clamp, gain as mkGain, killVoice } from './dsp.js';
 import { Mixer } from './mixer.js';
 import { SpatialField } from './spatial.js';
 import { Ambience, ambientOneShot, ONE_SHOTS } from './ambience.js';
@@ -113,9 +113,9 @@ export class AudioSystem {
     this._lastProbe = { x: 1e9, y: 0, z: 0 };
     this._origin = { x: 0, y: 0, z: 0 };
 
-    /* dry (head-locked) voice bookkeeping */
+    /* dry (head-locked) voice bookkeeping — `voice` is the synth root for killVoice */
     this._dry = [];
-    for (let i = 0; i < DRY_SLOTS; i++) this._dry.push({ node: null, send: null, end: 0 });
+    for (let i = 0; i < DRY_SLOTS; i++) this._dry.push({ node: null, send: null, voice: null, end: 0 });
     this._dryCursor = 0;
 
     /* per-frame rate limits (keys match FRAME_BUDGET) */
@@ -277,9 +277,10 @@ export class AudioSystem {
       for (let i = 0; i < this._dry.length; i++) {
         const d = this._dry[i];
         if (!d.node || now < d.end) continue;
+        killVoice(d.voice);
         try { d.node.disconnect(); } catch { /* already gone */ }
         try { d.send?.disconnect(); } catch { /* already gone */ }
-        d.node = null; d.send = null;
+        d.node = null; d.send = null; d.voice = null;
       }
 
       /* ---- low-health heartbeat ---------------------------------- */
@@ -400,6 +401,8 @@ export class AudioSystem {
   /**
    * Spatialised one-shot: propagation delay, occlusion, air absorption and the
    * reverb send. Returns false when the voice budget refused it.
+   *
+   * Acquire *before* synthesis so a full pool never pays for a discarded graph.
    */
   _playAt(kind, x, y, z, o = {}, bus = 'foley', priority = 0.5) {
     if (!this.running || this.actx.state === 'suspended') return false;
@@ -410,18 +413,33 @@ export class AudioSystem {
       if (dist > (o.maxDist ?? 320)) return false;
       const delay = o.noDelay ? 0 : dist / SPEED_OF_SOUND;
       const when = this.actx.currentTime + delay + (o.extraDelay ?? 0);
-      const voice = this._build(kind, when, dist, o);
+      // Provisional endTime / send — refined after build via hold + sendGain.
       const em = field.acquire({
         x, y, z, when, dist, bus, priority,
-        send: o.send ?? voice.send ?? 0.3,
+        send: o.send ?? 0.3,
         gain: o.gain ?? 1,
-        endTime: voice.end,
+        endTime: when + 1.2,
         occlusion: o.occlusion,
         tracked: o.tracked,
       });
-      if (!em) {
-        try { voice.node.disconnect(); } catch { /* noop */ }
+      if (!em) return false;
+
+      let voice;
+      try {
+        voice = this._build(kind, when, dist, o);
+      } catch (err) {
+        em.detach();
+        throw err;
+      }
+      if (!voice?.node) {
+        em.detach();
         return false;
+      }
+
+      // Refine wet level when the voice owns a default send and the caller didn't.
+      if (o.send == null && voice.send != null) {
+        const send = voice.send * (0.42 + Math.min(dist, 70) * 0.012);
+        em.sendGain.gain.setValueAtTime(clamp(send, 0, 1.0), when);
       }
       field.hold(em, voice.node, voice.end);
       this.stats.events++;
@@ -436,6 +454,25 @@ export class AudioSystem {
   _playDry(kind, o = {}, bus = 'foley', send = 0.15) {
     if (!this.running || this.actx.state === 'suspended') return false;
     try {
+      // Free a slot *before* synthesis so a steal kills the previous voice first
+      // and we never briefly run DRY_SLOTS+1 full synth graphs.
+      let slot = null;
+      for (let i = 0; i < this._dry.length; i++) {
+        const idx = (this._dryCursor + i) % this._dry.length;
+        if (!this._dry[idx].node) {
+          slot = this._dry[idx];
+          this._dryCursor = (idx + 1) % this._dry.length;
+          break;
+        }
+      }
+      if (!slot) {
+        slot = this._dry[this._dryCursor];
+        killVoice(slot.voice);
+        try { slot.node?.disconnect(); slot.send?.disconnect(); } catch { /* noop */ }
+        slot.node = null; slot.send = null; slot.voice = null;
+        this._dryCursor = (this._dryCursor + 1) % this._dry.length;
+      }
+
       const when = this.actx.currentTime + (o.extraDelay ?? 0);
       const voice = this._build(kind, when, o.dist ?? 0, o);
       // Cap dry gain so a mis-scaled caller can't slam the weapons bus alone.
@@ -453,23 +490,9 @@ export class AudioSystem {
         g.connect(sendNode);
         sendNode.connect(this.mixer.reverbSend);
       }
-      // Claim a bookkeeping slot; steal the oldest if all are busy.
-      let slot = null;
-      for (let i = 0; i < this._dry.length; i++) {
-        const idx = (this._dryCursor + i) % this._dry.length;
-        if (!this._dry[idx].node) {
-          slot = this._dry[idx];
-          this._dryCursor = (idx + 1) % this._dry.length;
-          break;
-        }
-      }
-      if (!slot) {
-        slot = this._dry[this._dryCursor];
-        try { slot.node.disconnect(); slot.send?.disconnect(); } catch { /* noop */ }
-        this._dryCursor = (this._dryCursor + 1) % this._dry.length;
-      }
       slot.node = g;
       slot.send = sendNode;
+      slot.voice = voice.node;
       slot.end = voice.end + 0.05;
       this.stats.events++;
       return true;

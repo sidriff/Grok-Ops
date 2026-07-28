@@ -86,6 +86,13 @@ export class AiSystem {
     this.debugLog = false;
     /** dev: force the garrison to spawn even in deterministic capture runs */
     this.forcePopulate = false;
+    /**
+     * Survival mode owns garrison + waves. Leave false so boot does not drop
+     * a static TDM pack before the match director runs.
+     */
+    this.autoPopulate = false;
+    /** Survival endgame freezes brains so the score card isn't a firefight. */
+    this.frozen = false;
     this._navPending = true;
     this.stats = { agents: 0, alive: 0, navMs: 0, coverPts: 0, walkable: 0, barks: 0, lastBark: null };
 
@@ -181,11 +188,50 @@ export class AiSystem {
   _bootNav(ctx) {
     try {
       this._buildNav();
-      if (!this._navPending && (!ctx.config.deterministic || this.forcePopulate)) this.populate();
+      if (
+        !this._navPending &&
+        this.autoPopulate &&
+        (!ctx.config.deterministic || this.forcePopulate)
+      ) {
+        this.populate();
+      }
     } catch (err) {
       this._navPending = true;
       console.warn('[ai] boot nav deferred to the first frame:', err?.message ?? err);
     }
+  }
+
+  /**
+   * Team id for any damage source: player / allies = 0, hostiles = 1+.
+   * Unknown sources return -1 (never matches a living team → damage applies).
+   */
+  teamOf(src) {
+    if (src == null) return -1;
+    if (src === 'player' || src?.isPlayer === true) return 0;
+    if (src === this.ctx?.peek?.('player')) return 0;
+    if (typeof src.team === 'number') return src.team;
+    return -1;
+  }
+
+  sameTeam(a, b) {
+    const ta = this.teamOf(a);
+    const tb = this.teamOf(b);
+    if (ta < 0 || tb < 0) return false;
+    return ta === tb;
+  }
+
+  /** Tear down every combatant (allies, hostiles, corpses). Safe mid-match. */
+  clearAllAgents() {
+    for (const a of this.agents) {
+      try {
+        a.dispose?.();
+      } catch {
+        /* ignore dispose races */
+      }
+    }
+    this.agents.length = 0;
+    this.squads.length = 0;
+    this._stagedAgents = null;
   }
 
   /**
@@ -324,8 +370,12 @@ export class AiSystem {
       if (!e || !e.origin || e.weapon === 'ai_rifle') return; // ignore our own
       // A gunshot is the loudest thing in the level: everybody hears it, and
       // anyone near the line of fire also feels suppressed by it.
+      // Source defaults to player for local weapons (they always set source now).
+      const src = e.source ?? 'player';
       for (const a of this.agents) {
         if (!a.alive) continue;
+        // Friendlies do not treat the player's muzzle as a contact to hunt.
+        if (this.sameTeam(src, a)) continue;
         a.hear(e.origin, 90);
         if (e.dir) {
           const d = this._distanceToRay(a.position, e.origin, e.dir, a.eyeHeight);
@@ -336,11 +386,12 @@ export class AiSystem {
 
     on('bullet:impact', (e) => {
       if (!e || !e.point) return;
+      const src = e.source ?? null;
       for (const a of this.agents) {
         if (!a.alive) continue;
         const d = a.position.distanceTo(e.point);
-        if (d < 3.2) a.suppress(0.5 * (1 - d / 3.2));
-        else if (d < 12) a.hear(e.point, 12);
+        if (d < 3.2 && !this.sameTeam(src, a)) a.suppress(0.5 * (1 - d / 3.2));
+        else if (d < 12 && !this.sameTeam(src, a)) a.hear(e.point, 12);
       }
     });
 
@@ -354,8 +405,18 @@ export class AiSystem {
         return;
       }
       if (!a.alive) return;
+      // Friendly fire off: same-team rounds (enemy-on-enemy, ally-on-ally,
+      // player-on-ally) never wound. This also stops AI crossfire from
+      // looking like local kills on the HUD.
+      if (this.sameTeam(e.source, a)) return;
       const amount = e.amount * this._falloff(e.point);
-      a.applyDamage(amount, e.headshot ? 'head' : e.part ?? 'torso', e.point ?? a.position, e.incident);
+      a.applyDamage(
+        amount,
+        e.headshot ? 'head' : e.part ?? 'torso',
+        e.point ?? a.position,
+        e.incident,
+        e.source
+      );
       if (!a.alive) e.killed = true;
     });
 
@@ -368,13 +429,14 @@ export class AiSystem {
         const d = a.position.distanceTo(e.position) + 0.001;
         a.hear(e.position, 120);
         if (d > radius) continue;
+        if (this.sameTeam(e.source, a)) continue;
         if (this.phys && !this.phys.lineOfSight(e.position, a.eye, this.phys.MASK.EXPLOSION)) continue;
         const f = 1 - d / radius;
         this._v.copy(a.position).sub(e.position).normalize();
         a.suppress(1.4 * f);
         const amount = (e.damage ?? 100) * f * f;
         const wasAlive = a.alive;
-        a.applyDamage(amount, 'torso', a.eye, this._v);
+        a.applyDamage(amount, 'torso', a.eye, this._v, e.source);
         if (wasAlive && playerSource) {
           this.ctx.events.emit('damage:dealt', {
             target: a,
@@ -393,7 +455,10 @@ export class AiSystem {
     on('player:footstep', (e) => {
       if (!e || !e.position) return;
       const loud = e.running ? 24 : 11;
-      for (const a of this.agents) if (a.alive) a.hear(e.position, loud);
+      // Only hostiles care about the player's footsteps.
+      for (const a of this.agents) {
+        if (a.alive && a.team !== 0) a.hear(e.position, loud);
+      }
     });
   }
 
@@ -591,7 +656,8 @@ export class AiSystem {
       .filter((e) => e.d > 18);
     if (!ranked.length) return 0;
 
-    const variants = ['vanguard', 'irregular', 'breacher'];
+    // Warm desert / mud OPFOR — blue-grey `breacher` is reserved for allies.
+    const variants = ['vanguard', 'irregular'];
     const squads = opts.squads ?? 2;
     const per = opts.perSquad ?? 3;
     let made = 0;
@@ -713,13 +779,17 @@ export class AiSystem {
         penetration: 0.9,
         maxDist: 200,
         mask: phys.MASK.BULLET,
+        source: agent,
       });
       if (impacts.length) end = impacts[0].point;
     }
     // physics has no player collider, so test the player capsule ourselves.
     // Staged agents shoot for the camera, not for blood: a capture must not be
     // graded through the player's low-health filter.
-    if (!agent.staged?.noDamage) this._testPlayerHit(agent, origin, dir, end);
+    // Friendlies (team 0) never open up on the local player.
+    if (!agent.staged?.noDamage && agent.team !== 0) {
+      this._testPlayerHit(agent, origin, dir, end);
+    }
 
     this._tracerFrom.copy(origin);
     if (end) this._tracerTo.copy(end);
@@ -871,7 +941,13 @@ export class AiSystem {
       // Populate the level for normal play. Capture runs stay empty unless a
       // shot asks for a tableau, so nobody's screenshot gets a stray patrol
       // wandering through it.
-      if (!this._navPending && (!ctx.config.deterministic || this.forcePopulate)) this.populate();
+      if (
+        !this._navPending &&
+        this.autoPopulate &&
+        (!ctx.config.deterministic || this.forcePopulate)
+      ) {
+        this.populate();
+      }
     }
 
     // Per-frame A* budget: see requestPath().
@@ -880,10 +956,18 @@ export class AiSystem {
 
     // Title shell freezes the clock (scale=0). Still skip brains so a stray
     // non-zero dt or path retry can't walk the garrison into the player mid-load.
-    const frozen = (ctx.time?.scale ?? 1) <= 0 || dt <= 0;
+    // Survival endgame sets `this.frozen` so the score screen isn't live combat.
+    const frozen = this.frozen || (ctx.time?.scale ?? 1) <= 0 || dt <= 0;
     if (frozen) {
       let alive = 0;
-      for (const a of this.agents) if (a.alive) alive++;
+      for (const a of this.agents) {
+        if (a.alive) {
+          alive++;
+          a.wantFire = false;
+        } else if (a.deadTime !== undefined) {
+          a.deadTime += dt;
+        }
+      }
       this.stats.agents = this.agents.length;
       this.stats.alive = alive;
       return;
