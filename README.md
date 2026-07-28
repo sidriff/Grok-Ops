@@ -7,8 +7,9 @@ one-shot [Claude of Duty](https://github.com/mshumer/Claude-of-Duty) by
 [@mattshumer_](https://x.com/mattshumer_).
 The scaffold was really impressive. But a lot of it was DOA when I tried to play it.
 
-I was able to refine it with **Grok** and my experience as a game designer. It took 4 to 5 hours and many small
-iterations. The Bitter Lesson doesn’t apply to games. Yet.
+I was able to refine it with **Grok** and my experience as a game designer.
+After spending 5 hours making small iterative changes, I feel pretty confident that
+the Bitter Lesson doesn’t apply to game design. Yet.
 
 — [@sidriff](https://x.com/sidriff)
 
