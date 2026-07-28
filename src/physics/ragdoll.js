@@ -72,8 +72,19 @@ export function humanoidSpec(height = 1.8, scaleMass = 82) {
 
 /** Max particle displacement per fixed step (~10 m/s). Lower = less thrash. */
 const MAX_PARTICLE_STEP = 0.085;
-const SLEEP_MOTION = 0.0028;
-const SLEEP_TIME = 0.45;
+/**
+ * Sleep is in metres-per-step (not m/s). Measured *after* constraints — pre-solve
+ * velocity ignores hinge/contact fighting that used to rock corpses forever.
+ * At 120 Hz, 0.005 ≈ 0.6 m/s RMS; 0.22 s of that → freeze.
+ */
+const SLEEP_MOTION = 0.005;
+const SLEEP_TIME = 0.22;
+/**
+ * Safety net: if still only crawling after this age, freeze. Threshold is tight
+ * so a mid-flop body is not frozen upright (that failed the collapse selftest).
+ */
+const FORCE_SLEEP_AGE = 2.4;
+const FORCE_SLEEP_MOTION = 0.007;
 /**
  * Floor mass used when applying impulses so hands/fingers never take the full
  * kick (invMass of a 0.5 kg hand would launch them through the ceiling).
@@ -154,6 +165,16 @@ export class Ragdoll {
     this.boneParent = new Int32Array(nb);
     this.boneCone = new Float32Array(nb);
     this.boneTwist = new Float32Array(nb);
+    /** 0 = ball cone from rest, 1 = hinge (knee/elbow). */
+    this.boneHinge = new Uint8Array(nb);
+    this.boneHingeMin = new Float32Array(nb);
+    this.boneHingeMax = new Float32Array(nb);
+    /** Child direction in parent bone frame at death pose (rest). */
+    this.boneRestLocal = new Float32Array(nb * 3);
+    /** Hinge axis in parent bone frame at rest. */
+    this.boneHingeLocal = new Float32Array(nb * 3);
+    /** Per-bone angular correction stiffness (higher = less noodle). */
+    this.boneStiff = new Float32Array(nb);
     /** Reference up-vector per bone, parallel-transported for twist. */
     this.boneUp = new Float32Array(nb * 3);
 
@@ -169,6 +190,10 @@ export class Ragdoll {
       this.boneParent[i] = s.parent ?? -1;
       this.boneCone[i] = s.cone ?? 70 * DEG;
       this.boneTwist[i] = s.twist ?? 40 * DEG;
+      this.boneHinge[i] = s.hinge ? 1 : 0;
+      this.boneHingeMin[i] = s.hingeMin ?? -8 * DEG;
+      this.boneHingeMax[i] = s.hingeMax ?? 145 * DEG;
+      this.boneStiff[i] = s.stiff ?? (s.hinge ? 0.88 : 0.55);
       pm[a] += this.boneMass[i] * 0.5;
       pm[c] += this.boneMass[i] * 0.5;
       this.boneUp[i * 3] = 0;
@@ -193,6 +218,7 @@ export class Ragdoll {
       if (this.boneLen[i] < 1e-4) this.boneLen[i] = 1e-4;
       this._initUp(i);
     }
+    this._initRestFrames();
 
     // skeleton binding (filled by adoptSkeleton)
     this.bones3D = null;
@@ -254,6 +280,119 @@ export class Ragdoll {
     this.boneUp[i * 3 + 2] = uz / ul;
   }
 
+  /**
+   * Store each bone's rest direction (and hinge axis) in the parent's frame so
+   * angular limits track the death pose as the torso tumbles — not "align with
+   * parent axis", which turns thighs into free ball joints off a lateral stub.
+   */
+  _initRestFrames() {
+    for (let i = 0; i < this.boneCount; i++) {
+      const p = this.boneParent[i];
+      // Default: identity rest along +Y in parent frame (unused if no parent).
+      this.boneRestLocal[i * 3] = 0;
+      this.boneRestLocal[i * 3 + 1] = 1;
+      this.boneRestLocal[i * 3 + 2] = 0;
+      this.boneHingeLocal[i * 3] = 1;
+      this.boneHingeLocal[i * 3 + 1] = 0;
+      this.boneHingeLocal[i * 3 + 2] = 0;
+      if (p < 0) continue;
+
+      const pa = this.boneHead[p], pc = this.boneTail[p];
+      let px = this.px[pc] - this.px[pa];
+      let py = this.py[pc] - this.py[pa];
+      let pz = this.pz[pc] - this.pz[pa];
+      const pl = Math.hypot(px, py, pz) || 1;
+      px /= pl; py /= pl; pz /= pl;
+
+      const a = this.boneHead[i], c = this.boneTail[i];
+      let cx = this.px[c] - this.px[a];
+      let cy = this.py[c] - this.py[a];
+      let cz = this.pz[c] - this.pz[a];
+      const cl = Math.hypot(cx, cy, cz) || 1;
+      cx /= cl; cy /= cl; cz /= cl;
+
+      // Parent basis: Y = bone dir, Z ≈ up, X = Y×Z
+      let ux = this.boneUp[p * 3], uy = this.boneUp[p * 3 + 1], uz = this.boneUp[p * 3 + 2];
+      let d = ux * px + uy * py + uz * pz;
+      ux -= px * d; uy -= py * d; uz -= pz * d;
+      let ul = Math.hypot(ux, uy, uz);
+      if (ul < 1e-5) {
+        ux = Math.abs(px) < 0.9 ? 1 : 0;
+        uy = 0;
+        uz = Math.abs(px) < 0.9 ? 0 : 1;
+        d = ux * px + uy * py + uz * pz;
+        ux -= px * d; uy -= py * d; uz -= pz * d;
+        ul = Math.hypot(ux, uy, uz) || 1;
+      }
+      ux /= ul; uy /= ul; uz /= ul;
+      // X = Y × Z
+      let xx = py * uz - pz * uy;
+      let xy = pz * ux - px * uz;
+      let xz = px * uy - py * ux;
+      const xl = Math.hypot(xx, xy, xz) || 1;
+      xx /= xl; xy /= xl; xz /= xl;
+      // Re-orthogonalize Z = X × Y
+      const zx = xy * pz - xz * py;
+      const zy = xz * px - xx * pz;
+      const zz = xx * py - xy * px;
+
+      // Child dir in parent local: columns of basis are X,Y,Z
+      this.boneRestLocal[i * 3] = cx * xx + cy * xy + cz * xz;
+      this.boneRestLocal[i * 3 + 1] = cx * px + cy * py + cz * pz;
+      this.boneRestLocal[i * 3 + 2] = cx * zx + cy * zy + cz * zz;
+
+      // Hinge axis = parent × child at rest (flexion plane normal)
+      let hx = py * cz - pz * cy;
+      let hy = pz * cx - px * cz;
+      let hz = px * cy - py * cx;
+      let hl = Math.hypot(hx, hy, hz);
+      if (hl < 1e-4) {
+        hx = ux; hy = uy; hz = uz;
+        hl = 1;
+      } else {
+        hx /= hl; hy /= hl; hz /= hl;
+      }
+      this.boneHingeLocal[i * 3] = hx * xx + hy * xy + hz * xz;
+      this.boneHingeLocal[i * 3 + 1] = hx * px + hy * py + hz * pz;
+      this.boneHingeLocal[i * 3 + 2] = hx * zx + hy * zy + hz * zz;
+    }
+  }
+
+  /** Parent bone world basis → out X,Y,Z unit axes. Returns false if degenerate. */
+  _parentBasis(p, out) {
+    const pa = this.boneHead[p], pc = this.boneTail[p];
+    let px = this.px[pc] - this.px[pa];
+    let py = this.py[pc] - this.py[pa];
+    let pz = this.pz[pc] - this.pz[pa];
+    const pl = Math.hypot(px, py, pz);
+    if (pl < 1e-9) return false;
+    px /= pl; py /= pl; pz /= pl;
+    let ux = this.boneUp[p * 3], uy = this.boneUp[p * 3 + 1], uz = this.boneUp[p * 3 + 2];
+    let d = ux * px + uy * py + uz * pz;
+    ux -= px * d; uy -= py * d; uz -= pz * d;
+    let ul = Math.hypot(ux, uy, uz);
+    if (ul < 1e-5) {
+      this._initUp(p);
+      ux = this.boneUp[p * 3]; uy = this.boneUp[p * 3 + 1]; uz = this.boneUp[p * 3 + 2];
+      d = ux * px + uy * py + uz * pz;
+      ux -= px * d; uy -= py * d; uz -= pz * d;
+      ul = Math.hypot(ux, uy, uz);
+      if (ul < 1e-5) return false;
+    }
+    ux /= ul; uy /= ul; uz /= ul;
+    let xx = py * uz - pz * uy;
+    let xy = pz * ux - px * uz;
+    let xz = px * uy - py * ux;
+    const xl = Math.hypot(xx, xy, xz) || 1;
+    xx /= xl; xy /= xl; xz /= xl;
+    out.yx = px; out.yy = py; out.yz = pz;
+    out.zx = xy * pz - xz * py;
+    out.zy = xz * px - xx * pz;
+    out.zz = xx * py - xy * px;
+    out.xx = xx; out.xy = xy; out.xz = xz;
+    return true;
+  }
+
   /** Set a uniform initial velocity (m/s) on every particle. */
   setVelocity(vx, vy, vz, dt = 1 / 120) {
     for (let i = 0; i < this.particleCount; i++) {
@@ -304,8 +443,9 @@ export class Ragdoll {
     this.age += dt;
     const n = this.particleCount;
     const g = this.gravity * dt * dt;
-    const damp = this.linearDamping;
-    let motion = 0;
+    // Age into stickier damping — leave the first ~0.6s lively for the flop.
+    const ageBleed = this.age < 0.55 ? 0 : Math.min(0.1, (this.age - 0.55) * 0.1);
+    const damp = Math.max(0.9, this.linearDamping - ageBleed);
 
     // --- Verlet integration ---
     for (let i = 0; i < n; i++) {
@@ -324,27 +464,52 @@ export class Ragdoll {
       this.px[i] += vx;
       this.py[i] += vy + g;
       this.pz[i] += vz;
-      motion += vx * vx + vy * vy + vz * vz;
     }
 
     // --- Gauss-Seidel constraint solve ---
     for (let it = 0; it < this.iterations; it++) {
       this._solveDistance();
       this._solveCones();
+      this._solveHinges();
       this._solveContacts(it === this.iterations - 1);
     }
+    // Extra length pass after angles so knees don't stretch when hinges yank.
+    this._solveDistance();
     // One self-collision pass per step: enough to stop an arm sinking through
     // the chest, cheap enough to run on every corpse on screen.
     this._solveSelf();
 
+    // Bleed residual velocity *after* constraints. PBD contact/hinge fighting
+    // writes position corrections that become next-step velocity; without this
+    // the sleep timer resets forever on a twitching pile.
+    // Ramp after the flop window so we don't freeze mid-collapse.
+    const settle =
+      this.age < 0.5 ? 0.03 : Math.min(0.32, 0.06 + (this.age - 0.5) * 0.2);
+    let motion = 0;
+    for (let i = 0; i < n; i++) {
+      if (this.invMass[i] === 0) continue;
+      const dx = this.px[i] - this.qx[i];
+      const dy = this.py[i] - this.qy[i];
+      const dz = this.pz[i] - this.qz[i];
+      motion += dx * dx + dy * dy + dz * dz;
+      // Move previous pos toward current → kills fraction `settle` of velocity.
+      this.qx[i] += dx * settle;
+      this.qy[i] += dy * settle;
+      this.qz[i] += dz * settle;
+    }
+
     this._transportUp();
     this._updateAabb();
 
-    // --- sleep ---
+    // --- sleep (post-constraint motion) ---
     const avg = motion / Math.max(1, n);
-    if (avg < SLEEP_MOTION * SLEEP_MOTION) {
+    const still = avg < SLEEP_MOTION * SLEEP_MOTION;
+    const crawling =
+      this.age >= FORCE_SLEEP_AGE && avg < FORCE_SLEEP_MOTION * FORCE_SLEEP_MOTION;
+    if (still || crawling) {
       this.sleepTimer += dt;
-      if (this.sleepTimer > SLEEP_TIME) {
+      const need = crawling && !still ? 0.1 : SLEEP_TIME;
+      if (this.sleepTimer > need) {
         this.sleeping = true;
         for (let i = 0; i < n; i++) {
           this.qx[i] = this.px[i];
@@ -379,21 +544,29 @@ export class Ragdoll {
   }
 
   /**
-   * Swing limit: the child bone direction may not deviate from its parent's by
-   * more than `cone`. Correction rotates the child's free end back onto the
-   * cone boundary, weighted by inverse mass so heavy limbs win.
+   * Ball-joint swing: child may not deviate more than `cone` from its *rest*
+   * direction in the parent frame (death pose). Hinge bones skip this — they
+   * use `_solveHinges` so knees can't splay sideways like rope.
    */
   _solveCones() {
+    const basis = this._basisTmp || (this._basisTmp = {
+      xx: 0, xy: 0, xz: 0, yx: 0, yy: 0, yz: 0, zx: 0, zy: 0, zz: 0,
+    });
     for (let i = 0; i < this.boneCount; i++) {
+      if (this.boneHinge[i]) continue;
       const p = this.boneParent[i];
       if (p < 0) continue;
       const cone = this.boneCone[i];
       if (cone >= Math.PI - 1e-3) continue;
+      if (!this._parentBasis(p, basis)) continue;
 
-      const pa = this.boneHead[p], pc = this.boneTail[p];
-      let ax = this.px[pc] - this.px[pa];
-      let ay = this.py[pc] - this.py[pa];
-      let az = this.pz[pc] - this.pz[pa];
+      // Preferred = parentBasis * restLocal
+      const rx = this.boneRestLocal[i * 3];
+      const ry = this.boneRestLocal[i * 3 + 1];
+      const rz = this.boneRestLocal[i * 3 + 2];
+      let ax = basis.xx * rx + basis.yx * ry + basis.zx * rz;
+      let ay = basis.xy * rx + basis.yy * ry + basis.zy * rz;
+      let az = basis.xz * rx + basis.yz * ry + basis.zz * rz;
       const al = Math.hypot(ax, ay, az);
       if (al < 1e-9) continue;
       ax /= al; ay /= al; az /= al;
@@ -411,7 +584,6 @@ export class Ragdoll {
       const angle = Math.acos(dot);
       if (angle <= cone) continue;
 
-      // axis = a x b (fall back to any perpendicular when anti-parallel)
       let kx = ay * bz - az * by;
       let ky = az * bx - ax * bz;
       let kz = ax * by - ay * bx;
@@ -423,7 +595,7 @@ export class Ragdoll {
       }
       kx /= kl; ky /= kl; kz /= kl;
 
-      // Rodrigues: rotate the parent direction by `cone` about k -> target dir
+      // Rotate preferred by `cone` toward current → target on cone surface
       const ca = Math.cos(cone), sa = Math.sin(cone);
       const cross_x = ky * az - kz * ay;
       const cross_y = kz * ax - kx * az;
@@ -433,24 +605,123 @@ export class Ragdoll {
       const ty = ay * ca + cross_y * sa + ky * kdot * (1 - ca);
       const tz = az * ca + cross_z * sa + kz * kdot * (1 - ca);
 
-      // Soft cone correction — stiff limits fight contacts and thrash limbs.
-      const stiff = 0.4;
-      const gx = this.px[a] + tx * bl;
-      const gy = this.py[a] + ty * bl;
-      const gz = this.pz[a] + tz * bl;
-      const wa = this.invMass[a], wc = this.invMass[c];
-      const w = wa + wc;
-      if (w === 0) continue;
-      const ex = (gx - this.px[c]) * stiff;
-      const ey = (gy - this.py[c]) * stiff;
-      const ez = (gz - this.pz[c]) * stiff;
-      this.px[c] += ex * (wc / w);
-      this.py[c] += ey * (wc / w);
-      this.pz[c] += ez * (wc / w);
-      this.px[a] -= ex * (wa / w);
-      this.py[a] -= ey * (wa / w);
-      this.pz[a] -= ez * (wa / w);
+      this._pullBoneTail(i, a, c, tx, ty, tz, bl, this.boneStiff[i]);
     }
+  }
+
+  /**
+   * Knee/elbow hinge: kill side-splay, clamp flexion. Prevents the classic
+   * "legs as wet spaghetti" look where shins flop out of the sagittal plane.
+   */
+  _solveHinges() {
+    const basis = this._basisTmp || (this._basisTmp = {
+      xx: 0, xy: 0, xz: 0, yx: 0, yy: 0, yz: 0, zx: 0, zy: 0, zz: 0,
+    });
+    for (let i = 0; i < this.boneCount; i++) {
+      if (!this.boneHinge[i]) continue;
+      const p = this.boneParent[i];
+      if (p < 0) continue;
+      if (!this._parentBasis(p, basis)) continue;
+
+      // World hinge axis from parent frame
+      const lx = this.boneHingeLocal[i * 3];
+      const ly = this.boneHingeLocal[i * 3 + 1];
+      const lz = this.boneHingeLocal[i * 3 + 2];
+      let hx = basis.xx * lx + basis.yx * ly + basis.zx * lz;
+      let hy = basis.xy * lx + basis.yy * ly + basis.zy * lz;
+      let hz = basis.xz * lx + basis.yz * ly + basis.zz * lz;
+      let hl = Math.hypot(hx, hy, hz);
+      if (hl < 1e-7) continue;
+      hx /= hl; hy /= hl; hz /= hl;
+
+      // Parent distal direction
+      let px = basis.yx, py = basis.yy, pz = basis.yz;
+
+      const a = this.boneHead[i], c = this.boneTail[i];
+      let bx = this.px[c] - this.px[a];
+      let by = this.py[c] - this.py[a];
+      let bz = this.pz[c] - this.pz[a];
+      const bl = Math.hypot(bx, by, bz);
+      if (bl < 1e-9) continue;
+      bx /= bl; by /= bl; bz /= bl;
+
+      // 1) Project child into the hinge plane (remove lateral splay)
+      const hd = bx * hx + by * hy + bz * hz;
+      let fx = bx - hx * hd;
+      let fy = by - hy * hd;
+      let fz = bz - hz * hd;
+      let fl = Math.hypot(fx, fy, fz);
+      if (fl < 1e-7) {
+        // Degenerate: rebuild from rest flex in plane
+        const rx = this.boneRestLocal[i * 3];
+        const ry = this.boneRestLocal[i * 3 + 1];
+        const rz = this.boneRestLocal[i * 3 + 2];
+        fx = basis.xx * rx + basis.yx * ry + basis.zx * rz;
+        fy = basis.xy * rx + basis.yy * ry + basis.zy * rz;
+        fz = basis.xz * rx + basis.yz * ry + basis.zz * rz;
+        const rd = fx * hx + fy * hy + fz * hz;
+        fx -= hx * rd; fy -= hy * rd; fz -= hz * rd;
+        fl = Math.hypot(fx, fy, fz);
+        if (fl < 1e-7) continue;
+      }
+      fx /= fl; fy /= fl; fz /= fl;
+
+      // 2) Clamp angle between parent and flexed dir
+      let dot = px * fx + py * fy + pz * fz;
+      if (dot > 1) dot = 1; else if (dot < -1) dot = -1;
+      let ang = Math.acos(dot);
+      // Signed flexion via hinge axis (right-hand)
+      const cx = py * fz - pz * fy;
+      const cy = pz * fx - px * fz;
+      const cz = px * fy - py * fx;
+      if (cx * hx + cy * hy + cz * hz < 0) ang = -ang;
+
+      const amin = this.boneHingeMin[i];
+      const amax = this.boneHingeMax[i];
+      let target = ang;
+      if (ang < amin) target = amin;
+      else if (ang > amax) target = amax;
+
+      // Also clamp residual lateral cone (cone field = max |hd| as angle-ish)
+      // Rebuild target dir by rotating parent around hinge by `target`.
+      const ca = Math.cos(target), sa = Math.sin(target);
+      const cross_x = hy * pz - hz * py;
+      const cross_y = hz * px - hx * pz;
+      const cross_z = hx * py - hy * px;
+      const kdot = hx * px + hy * py + hz * pz;
+      let tx = px * ca + cross_x * sa + hx * kdot * (1 - ca);
+      let ty = py * ca + cross_y * sa + hy * kdot * (1 - ca);
+      let tz = pz * ca + cross_z * sa + hz * kdot * (1 - ca);
+      const tl = Math.hypot(tx, ty, tz) || 1;
+      tx /= tl; ty /= tl; tz /= tl;
+
+      // If already near target and little splay, skip
+      const splay = Math.abs(hd);
+      const err = Math.abs(ang - target);
+      if (splay < 0.02 && err < 0.02) continue;
+
+      this._pullBoneTail(i, a, c, tx, ty, tz, bl, this.boneStiff[i]);
+    }
+  }
+
+  /** Pull bone tail toward a unit direction with inverse-mass weighting. */
+  _pullBoneTail(i, a, c, tx, ty, tz, bl, stiff) {
+    const gx = this.px[a] + tx * bl;
+    const gy = this.py[a] + ty * bl;
+    const gz = this.pz[a] + tz * bl;
+    const wa = this.invMass[a], wc = this.invMass[c];
+    const w = wa + wc;
+    if (w === 0) return;
+    const k = stiff ?? 0.55;
+    const ex = (gx - this.px[c]) * k;
+    const ey = (gy - this.py[c]) * k;
+    const ez = (gz - this.pz[c]) * k;
+    this.px[c] += ex * (wc / w);
+    this.py[c] += ey * (wc / w);
+    this.pz[c] += ez * (wc / w);
+    this.px[a] -= ex * (wa / w);
+    this.py[a] -= ey * (wa / w);
+    this.pz[a] -= ez * (wa / w);
   }
 
   /** Capsule bones vs the static world, with friction against the previous position. */

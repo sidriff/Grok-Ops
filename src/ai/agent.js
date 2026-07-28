@@ -53,13 +53,12 @@ const HITBOXES = [
 
 /**
  * Ragdoll bone spec, in the order the solver wants it.
- *   [ headBone, tailBone, radius, massFraction, parentIndex, cone°, twist°, map ]
- * `map` false marks a stub whose only job is to weld a limb chain to the torso:
- * the solver shares a particle between two bones only when their endpoints are
- * coincident, so the shoulder and hip need a bone that starts exactly on the
- * spine joint. Deriving our own spec (instead of letting physics infer one from
- * all 25 bones) also gets the capsule radii right, which is the difference
- * between a body and a pancake.
+ *   [ head, tail, radius, massFrac, parent, cone°, twist°, map, kind? ]
+ * `kind` optional: 'hinge' for knees (and elbows) — no side-splay.
+ * `map` false = weld stub only (shoulder/hip), not driven as a mesh bone.
+ *
+ * Legs are intentionally heavier + tighter than arms: thighs use a rest-pose
+ * ball cone (~50°), knees are hinges so shins can't flop out of plane.
  */
 const DOLL = [
   ['Hips', 'Spine', 0.135, 0.14, -1, 0, 0, true],
@@ -68,25 +67,24 @@ const DOLL = [
   ['Spine2', 'Neck', 0.130, 0.10, 2, 16, 10, true],
   ['Neck', 'Head', 0.052, 0.03, 3, 30, 25, true],
   ['Head', 'HeadTop', 0.098, 0.07, 4, 42, 30, true],
-  // stubs get a free cone: their direction is lateral while the parent points
-  // up the spine, so any limit here is violated in the bind pose and the solver
-  // would inject energy trying to fix it
+  // stubs: free cone (lateral vs spine) — only weld particles
   ['Spine2', 'UpperArmR', 0.055, 0.02, 3, 179, 179, false],
-  ['UpperArmR', 'ForearmR', 0.058, 0.027, 6, 100, 60, true],
-  ['ForearmR', 'HandR', 0.048, 0.018, 7, 80, 45, true],
-  ['HandR', 'FingersR', 0.038, 0.006, 8, 55, 40, true],
+  ['UpperArmR', 'ForearmR', 0.058, 0.027, 6, 85, 45, true],
+  ['ForearmR', 'HandR', 0.048, 0.018, 7, 12, 20, true, 'hinge'],
+  ['HandR', 'FingersR', 0.038, 0.006, 8, 45, 30, true],
   ['Spine2', 'UpperArmL', 0.055, 0.02, 3, 179, 179, false],
-  ['UpperArmL', 'ForearmL', 0.058, 0.027, 10, 100, 60, true],
-  ['ForearmL', 'HandL', 0.048, 0.018, 11, 80, 45, true],
-  ['HandL', 'FingersL', 0.038, 0.006, 12, 55, 40, true],
-  ['Hips', 'UpLegR', 0.065, 0.02, 0, 179, 179, false],
-  ['UpLegR', 'LegR', 0.088, 0.10, 14, 95, 35, true],
-  ['LegR', 'FootR', 0.068, 0.045, 15, 70, 20, true],
-  ['FootR', 'ToeR', 0.050, 0.012, 16, 40, 20, true],
-  ['Hips', 'UpLegL', 0.065, 0.02, 0, 179, 179, false],
-  ['UpLegL', 'LegL', 0.088, 0.10, 18, 95, 35, true],
-  ['LegL', 'FootL', 0.068, 0.045, 19, 70, 20, true],
-  ['FootL', 'ToeL', 0.050, 0.012, 20, 40, 20, true],
+  ['UpperArmL', 'ForearmL', 0.058, 0.027, 10, 85, 45, true],
+  ['ForearmL', 'HandL', 0.048, 0.018, 11, 12, 20, true, 'hinge'],
+  ['HandL', 'FingersL', 0.038, 0.006, 12, 45, 30, true],
+  // hips free stub; thighs rest-cone (not free ball); knees hinge; fat shins
+  ['Hips', 'UpLegR', 0.07, 0.03, 0, 179, 179, false],
+  ['UpLegR', 'LegR', 0.1, 0.14, 14, 48, 18, true],
+  ['LegR', 'FootR', 0.078, 0.065, 15, 10, 12, true, 'hinge'],
+  ['FootR', 'ToeR', 0.055, 0.02, 16, 28, 14, true],
+  ['Hips', 'UpLegL', 0.07, 0.03, 0, 179, 179, false],
+  ['UpLegL', 'LegL', 0.1, 0.14, 18, 48, 18, true],
+  ['LegL', 'FootL', 0.078, 0.065, 19, 10, 12, true, 'hinge'],
+  ['FootL', 'ToeL', 0.055, 0.02, 20, 28, 14, true],
 ];
 
 const DEG = Math.PI / 180;
@@ -1267,7 +1265,7 @@ export class Agent {
     const rowToSpec = new Int32Array(DOLL.length).fill(-1);
     const s = this.scale || 1;
     for (let i = 0; i < DOLL.length; i++) {
-      const [headName, tailName, radius, massFrac, parent, cone, twist, mapped] =
+      const [headName, tailName, radius, massFrac, parent, cone, twist, mapped, kind] =
         DOLL[i];
       const head = worldOf(headName);
       const tail = worldOf(tailName);
@@ -1283,6 +1281,8 @@ export class Agent {
       const si = spec.length;
       rowToSpec[i] = si;
       const p = parent >= 0 ? rowToSpec[parent] : -1;
+      const isHinge = kind === 'hinge';
+      const isLeg = /^(UpLeg|Leg|Foot)/.test(headName);
 
       spec.push({
         name: mapped ? headName : `${headName}>${tailName}`,
@@ -1293,6 +1293,12 @@ export class Agent {
         parent: p,
         cone: cone * DEG,
         twist: twist * DEG,
+        hinge: isHinge,
+        // Knees: almost no hyperextension, full sit-down flex.
+        hingeMin: isHinge ? -6 * DEG : 0,
+        hingeMax: isHinge ? 150 * DEG : 0,
+        // Legs stiffer than arms so they plant instead of noodle.
+        stiff: isHinge ? 0.92 : isLeg ? 0.78 : 0.55,
       });
       boneMap[si] = mapped ? byName.get(headName) ?? null : null;
     }
