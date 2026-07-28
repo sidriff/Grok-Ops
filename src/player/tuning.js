@@ -256,7 +256,7 @@ export const HEALTH = {
   max: 100,
   /** CoD: regen starts ~5 s after the last hit and refills in ~2.5 s. */
   regenDelay: 4.6,
-  regenRate: 34,
+  regenRate: 5,
   regenRamp: 0.55,
   lowThreshold: 0.36,
   criticalThreshold: 0.18,
